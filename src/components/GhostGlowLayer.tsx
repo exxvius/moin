@@ -21,8 +21,8 @@ import {
   type RefObject,
 } from "react";
 
-// Keep exit fades in step with the card's 360ms hover/select transitions.
-const FADE_MS = 360;
+// Keep exit fades in step with the card's 240ms hover/select transitions.
+const FADE_MS = 240;
 
 interface Ghost {
   id: string;

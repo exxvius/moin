@@ -275,7 +275,8 @@
 .live-card,
 .ecard,
 .dropzone,
-.dl-card {
+.dl-card,
+.cat-card {
   position: relative;
   isolation: isolate;
 }
@@ -288,7 +289,8 @@
 .live-card::after,
 .ecard::after,
 .dropzone::after,
-.dl-card::after {
+.dl-card::after,
+.cat-card::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -297,8 +299,9 @@
   padding: 1px;
   background: radial-gradient(
     var(--glow-radius) circle at var(--mx, 50%) var(--my, 50%),
-    color-mix(in oklab, var(--tone, var(--accent)) 75%, white),
-    color-mix(in oklab, var(--tone, var(--accent)) 30%, transparent) 45%,
+    color-mix(in oklab, var(--cat, var(--tone, var(--accent))) 75%, white),
+    color-mix(in oklab, var(--cat, var(--tone, var(--accent))) 30%, transparent)
+      45%,
     transparent 66%
   );
   -webkit-mask:
@@ -311,8 +314,8 @@
   mask-composite: exclude;
   opacity: calc(var(--glow, 0) * 0.9);
   transition:
-    opacity 360ms var(--ease),
-    --glow-radius 360ms var(--ease);
+    opacity 240ms var(--ease),
+    --glow-radius 240ms var(--ease);
   pointer-events: none;
 }
 /* On hover the localized glow blooms out to wrap the whole border; on leave it
@@ -322,8 +325,19 @@
 .live-card:hover::after,
 .ecard:hover::after,
 .dropzone:hover::after,
-.dl-card:hover::after {
+.dl-card:hover::after,
+.cat-card:hover::after {
   --glow-radius: 3000px;
+}
+/* Download rows use their category color when categorized, else a neutral white
+   proximity glow (rather than the status tone). */
+.dl-card::after {
+  background: radial-gradient(
+    var(--glow-radius) circle at var(--mx, 50%) var(--my, 50%),
+    color-mix(in oklab, var(--cat, white) 75%, white),
+    color-mix(in oklab, var(--cat, white) 30%, transparent) 45%,
+    transparent 66%
+  );
 }
 
 /* ---- Shiny text on hover (nav labels, card titles) ----
@@ -1289,7 +1303,8 @@
   box-shadow:
     var(--glass-highlight),
     0 20px 44px -18px oklch(0% 0 0 / 0.8);
-  z-index: 100;
+  /* Above the modal backdrop (200) so pickers inside a modal float on top. */
+  z-index: 300;
   animation: sel-in var(--duration-fast) var(--ease);
 }
 @keyframes sel-in {

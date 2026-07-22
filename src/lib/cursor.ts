@@ -6,7 +6,7 @@
 // :hover needed. One passive pointermove listener, rAF-throttled; reads all
 // rects before writing any vars to avoid layout thrashing.
 
-const GLOW_SELECTOR = ".card, .dl-card";
+const GLOW_SELECTOR = ".card, .dl-card, .cat-card";
 const GLOW_RANGE = 260; // px falloff: elements within this of the cursor glow
 
 export function initCursorFx(): () => void {

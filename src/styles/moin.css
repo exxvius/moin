@@ -4,7 +4,7 @@
 
 /* ---- Animated sun ⇄ moon theme toggle (toggles.dev "spin") ---- */
 .sun-moon {
-  --spin: 400ms;
+  --spin: 240ms;
   --spin-ease: cubic-bezier(0.5, 1.5, 0.6, 1);
   overflow: visible;
 }
@@ -191,6 +191,362 @@
   flex: none;
 }
 
+/* ---- Categories ---- */
+/* Wider, height-capped modal for the category editor; body scrolls, title and
+   actions stay pinned. */
+.modal.modal-lg {
+  width: min(920px, 94vw);
+  max-height: min(82vh, 760px);
+  display: flex;
+  flex-direction: column;
+}
+.modal-scroll {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0 calc(-1 * var(--space-2));
+  padding: 0 var(--space-2);
+}
+.cat-section {
+  padding: var(--space-3) 0;
+}
+
+/* ---- Category icon picker ---- */
+.cat-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  flex: none;
+}
+.icon-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.icon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(38px, 1fr));
+  gap: var(--space-1);
+  margin-top: var(--space-3);
+  max-height: 200px;
+  overflow-y: auto;
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--control-bg);
+}
+.icon-swatch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    background var(--duration-fast) var(--ease),
+    color var(--duration-fast) var(--ease);
+}
+.icon-swatch:hover {
+  border-color: var(--border-strong);
+  color: inherit;
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+}
+.icon-swatch.on {
+  border-color: var(--accent);
+  color: inherit;
+  background: var(--accent-quiet);
+}
+
+/* Categories page fills the height like the downloads panel. */
+.view.categories {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.view.categories .view-head {
+  margin-bottom: 0;
+}
+.cat-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+.cat-panel {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  overflow: hidden;
+  /* The panel's own backdrop blur (inherited from .card) would nest inside the
+     dragged card's blur and cancel it out, so turn it off here — same as the
+     downloads panel. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+/* The scrollable category list; the Uncategorized row stays pinned below it. */
+.cat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* Uncategorized: a fixed, neutral row for the default save folder only. */
+.cat-card-uncat {
+  flex: none;
+  --cat: var(--text-dim);
+  cursor: default;
+}
+
+.cat-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+/* Each category is a card tinted with its own accent (--cat, set inline). Same
+   treatment as the download task cards: a tone tint on an overlay that sweeps on
+   hover, plus a border-color shift. Grab it anywhere to drag. */
+.cat-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  --tint-start: 0%;
+  --tint-end: 45%;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  background: var(--glass-bg);
+  box-shadow: var(--glass-highlight);
+  overflow: hidden;
+  cursor: grab;
+  transition:
+    border-color 240ms var(--ease),
+    box-shadow 240ms var(--ease),
+    --tint-start 240ms var(--ease),
+    --tint-end 240ms var(--ease);
+}
+.cat-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent calc(var(--tint-start) - 12%),
+    color-mix(in oklab, var(--cat, var(--accent)) 13%, transparent) var(--tint-start),
+    transparent var(--tint-end)
+  );
+}
+/* Keep the card content above the tint overlay. */
+.cat-card > * {
+  position: relative;
+  z-index: 1;
+}
+.cat-card:hover {
+  --tint-start: 0%;
+  --tint-end: 130%;
+  border-color: color-mix(in oklab, var(--cat, var(--accent)) 32%, var(--glass-border));
+}
+/* While grabbed: a frosted floating panel like the download list header. */
+.cat-card[data-dragging] {
+  z-index: 3;
+  cursor: grabbing;
+  border-color: color-mix(in oklab, var(--cat, var(--accent)) 40%, var(--glass-border));
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  box-shadow:
+    var(--glass-highlight),
+    0 16px 38px -12px oklch(0% 0 0 / 0.72);
+}
+/* Buttons keep their own pointer cursor over the draggable card. */
+.cat-card .dl-btn {
+  cursor: pointer;
+}
+.cat-row-main {
+  flex: 1;
+  min-width: 0;
+}
+.cat-sub {
+  margin-top: 2px;
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cat-row-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex: none;
+}
+.cat-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.cat-name {
+  max-width: 240px;
+}
+.cat-savedir {
+  margin-top: var(--space-2);
+  overflow-wrap: anywhere;
+}
+
+/* ---- Trigger builder ---- */
+.trigger-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+}
+.trigger-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* While grabbed: lift into a frosted floating row. */
+.trigger-row[data-dragging] {
+  position: relative;
+  z-index: 3;
+  border-radius: var(--radius-sm);
+  background: var(--glass-bg);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  box-shadow:
+    var(--glass-highlight),
+    0 12px 28px -10px oklch(0% 0 0 / 0.6);
+}
+.drag-handle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  color: var(--text-dim);
+  opacity: 0.6;
+  touch-action: none;
+  user-select: none;
+  transition:
+    opacity var(--duration-fast) var(--ease),
+    color var(--duration-fast) var(--ease);
+}
+.drag-handle:hover {
+  opacity: 1;
+  color: var(--text);
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+.trigger-fields {
+  flex: 1;
+  min-width: 0;
+}
+.trigger-fields .add-input {
+  width: 100%;
+}
+
+/* ---- Token / chip input ---- */
+.token-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 40px;
+  padding: 5px var(--space-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--control-bg);
+  box-shadow: var(--control-shadow);
+  cursor: text;
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    box-shadow var(--duration-fast) var(--ease);
+}
+.token-input:focus-within {
+  border-color: var(--accent);
+  box-shadow:
+    var(--control-shadow),
+    0 0 0 3px var(--accent-quiet);
+}
+.token {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in oklab, var(--accent) 40%, var(--border));
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease);
+}
+.token:hover {
+  border-color: var(--accent);
+}
+.token-text {
+  flex: 1;
+  min-width: 80px;
+  border: none;
+  background: none;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-base);
+  padding: 2px 0;
+}
+.token-text::placeholder {
+  color: var(--text-faint);
+}
+.cat-sources {
+  margin-top: var(--space-2);
+}
+.size-fields {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* The "to" separator: drop the .dim top margin so it centers on the line. */
+.size-fields .dim {
+  margin: 0;
+}
+.size-input {
+  width: 8rem;
+}
+.add-trigger {
+  margin-top: var(--space-1);
+}
+.method-chips {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.method-chip {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 4px var(--space-3);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    color var(--duration-fast) var(--ease);
+}
+.method-chip.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* ---- Right-click context menu ---- */
 .ctx-menu {
   min-width: 190px;
@@ -293,6 +649,14 @@
   display: flex;
   gap: var(--space-3);
   align-items: stretch;
+}
+/* The category picker sits in a stretched row; let its trigger fill the height
+   so its (centered) icon + label line up with the input and button. */
+.add-row .sel {
+  display: flex;
+}
+.add-row .sel-trigger {
+  flex: 1;
 }
 .add-input {
   flex: 1;
@@ -587,12 +951,12 @@
   top: 0;
   left: 0;
   border-radius: var(--radius-sm);
-  box-shadow: 0 0 22px -12px
-    color-mix(in oklab, var(--tone, var(--accent)) 48%, transparent);
+  box-shadow: 0 0 20px -14px
+    color-mix(in oklab, var(--tone, var(--accent)) 34%, transparent);
   /* Fade in on appear, and out (opacity flipped by JS) when the row stops being
-     highlighted — matching the card's 360ms hover/select transitions. */
-  animation: ghost-in 360ms var(--ease);
-  transition: opacity 360ms var(--ease);
+     highlighted — matching the card's 240ms hover/select transitions. */
+  animation: ghost-in 240ms var(--ease);
+  transition: opacity 240ms var(--ease);
 }
 @keyframes ghost-in {
   from {
@@ -635,6 +999,12 @@
   align-items: center;
   gap: var(--space-3);
   padding: 0 var(--space-4);
+}
+/* `.dim` is a color utility but also carries a top margin (for stacked setting
+   descriptions). Inside a row it would push numeric cells off-center, so drop
+   it here. */
+.dl-grid .dim {
+  margin: 0;
 }
 
 /* Floating frosted-glass header (pinned by .ss-header): the blur diffuses
@@ -748,18 +1118,22 @@
   flex: none;
   --tint-start: 0%;
   --tint-end: 45%;
-  border: 1px solid var(--glass-border);
+  /* Categorized cards carry a faint tint of their category color on the border
+     even at rest (--cat is set only when the task has a colored category);
+     hover/select brighten it. Uncategorized cards keep the neutral border. */
+  border: 1px solid
+    color-mix(in oklab, var(--cat, transparent) 24%, var(--glass-border));
   border-radius: var(--radius-sm);
   background: var(--glass-bg);
   box-shadow: var(--glass-highlight);
   overflow: hidden;
   transition:
-    border-color 360ms var(--ease),
-    box-shadow 360ms var(--ease),
-    /* Match the mouse-tracked border-glow bloom (--glow-radius, 360ms) so the
+    border-color 240ms var(--ease),
+    box-shadow 240ms var(--ease),
+    /* Match the mouse-tracked border-glow bloom (--glow-radius, 240ms) so the
        tint sweeps across the card in step with it. */
-    --tint-start 360ms var(--ease),
-    --tint-end 360ms var(--ease);
+    --tint-start 240ms var(--ease),
+    --tint-end 240ms var(--ease);
 }
 /* The tone tint lives on an overlay. At rest it fades out early (0%→30%); on
    hover/select the whole fade range slides right (30%→100%), sweeping the tint
@@ -773,7 +1147,9 @@
   background: linear-gradient(
     100deg,
     transparent calc(var(--tint-start) - 12%),
-    color-mix(in oklab, var(--tone, transparent) 13%, transparent)
+    /* Categorized rows tint with their category color; uncategorized rows get
+       no background tint at all. */
+    color-mix(in oklab, var(--cat, transparent) 13%, transparent)
       var(--tint-start),
     transparent var(--tint-end)
   );
@@ -790,15 +1166,17 @@
 .dl-card.selected {
   --tint-start: 0%;
   --tint-end: 130%;
-  border-color: color-mix(in oklab, var(--tone, var(--accent)) 32%, var(--glass-border));
+  /* Category color when categorized, else a neutral white edge. */
+  border-color: color-mix(
+    in oklab,
+    var(--cat, white) 32%,
+    var(--glass-border)
+  );
 }
-/* Selected rows get a thicker edge: an inset ring stacked on the border (so
-   nothing reflows) reads as a wider, tone-tinted border. */
+/* Selected rows read as a plain 1px tone-tinted border (brighter than hover),
+   without the extra inset ring that made the edge thicker. */
 .dl-card.selected {
-  border-color: color-mix(in oklab, var(--tone, var(--accent)) 48%, var(--glass-border));
-  box-shadow:
-    var(--glass-highlight),
-    inset 0 0 0 0.5px color-mix(in oklab, var(--tone, var(--accent)) 55%, transparent);
+  border-color: color-mix(in oklab, var(--cat, white) 55%, var(--glass-border));
 }
 /* Archived cards aren't status-coloured (no live status to reflect). */
 .dl-card.archived {
@@ -827,7 +1205,18 @@
   font-variant-numeric: tabular-nums;
 }
 .dl-c-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
   font-weight: 500;
+}
+.dl-name-icon {
+  display: inline-flex;
+  flex: none;
+}
+.dl-name-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1033,6 +1422,11 @@
 .detail-item.wide {
   grid-column: 1 / -1;
 }
+/* Right-column items hug the card's right edge instead of floating mid-width. */
+.detail-item.right {
+  align-items: flex-end;
+  text-align: right;
+}
 .dk {
   font-size: var(--text-xs);
   text-transform: uppercase;
@@ -1198,7 +1592,8 @@
   box-shadow:
     var(--glass-highlight),
     0 20px 44px -18px oklch(0% 0 0 / 0.8);
-  z-index: 100;
+  /* Above the modal backdrop (200) so pickers inside a modal float on top. */
+  z-index: 300;
   animation: sel-in var(--duration-fast) var(--ease);
 }
 @keyframes sel-in {
@@ -1238,4 +1633,9 @@
   border-radius: 50%;
   box-shadow: 0 0 0 1px var(--border-strong);
   flex: none;
+}
+/* "No color" swatch: a hollow ring instead of a filled dot. */
+.accent-dot.no-color {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--text-faint);
 }

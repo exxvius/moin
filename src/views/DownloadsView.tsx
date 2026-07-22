@@ -13,6 +13,9 @@ import { ContextMenu, type MenuEntry } from "../components/ContextMenu";
 import { GhostGlowLayer } from "../components/GhostGlowLayer";
 import { useListSelection } from "../lib/useListSelection";
 import { useStore } from "../lib/store";
+import { categorySwatch, findCategory } from "../lib/categories";
+import { CategoryIcon } from "../components/CategoryIcon";
+import type { Category } from "../lib/types";
 import {
   formatBytes,
   formatDate,
@@ -41,18 +44,6 @@ const STATUS_CLASS: Record<TaskStatus, string> = {
   completed: "ok",
   failed: "bad",
   canceled: "faint",
-};
-
-// The glow tone per status, mirroring the --tone assignments in CSS. Used by
-// the ghost layer to color each escaping-glow rectangle.
-const STATUS_TONE: Record<TaskStatus, string> = {
-  queued: "var(--text-dim)",
-  connecting: "var(--accent)",
-  downloading: "var(--accent)",
-  paused: "var(--warn)",
-  completed: "var(--ok)",
-  failed: "var(--bad)",
-  canceled: "var(--text-faint)",
 };
 
 type FilterId = "all" | "active" | "paused" | "done" | "issues" | "archived";
@@ -266,6 +257,44 @@ function loadSort(): SortLevel[] {
   return [];
 }
 
+// Once a row changes position, it holds that slot for this long — so live-sorted
+// rows (e.g. by progress) can't flip-flop past each other every tick.
+const REORDER_COOLDOWN_MS = 1000;
+
+// Reconcile the target sort order against the current display order: any row that
+// moved within the cooldown stays pinned to its slot, and the rest sort freely
+// into the gaps. Handles added/removed rows too. Returns the ids to display.
+function reorderWithCooldown(
+  targetIds: string[],
+  prevOrder: string[],
+  movedAt: Map<string, number>,
+  now: number,
+): string[] {
+  const target = new Set(targetIds);
+  const n = targetIds.length;
+  const locked = (id: string) => {
+    const t = movedAt.get(id);
+    return t != null && now - t < REORDER_COOLDOWN_MS;
+  };
+  // Start from the previous order (so pinned rows keep their index), dropping
+  // gone ids and appending newly-added ones.
+  const kept = prevOrder.filter((id) => target.has(id));
+  const known = new Set(kept);
+  const base = kept.concat(targetIds.filter((id) => !known.has(id)));
+
+  const result: (string | null)[] = new Array(n).fill(null);
+  base.forEach((id, i) => {
+    if (locked(id)) result[i] = id;
+  });
+  const pinned = new Set(result.filter((id): id is string => id != null));
+  const free = targetIds.filter((id) => !pinned.has(id));
+  let k = 0;
+  for (let i = 0; i < n; i++) {
+    if (result[i] == null) result[i] = free[k++];
+  }
+  return result as string[];
+}
+
 interface DownloadsViewProps {
   /** Slide rows when the sort reorders (off = they jump into place). */
   animateReorder: boolean;
@@ -274,6 +303,8 @@ interface DownloadsViewProps {
 export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   const store = useStore();
   const [filter, setFilter] = useState<FilterId>("all");
+  // "" = every category (and uncategorized); "none" = only uncategorized.
+  const [categoryFilter, setCategoryFilter] = useState("");
   const [query, setQuery] = useState("");
   const [sortStack, setSortStack] = useState<SortLevel[]>(loadSort);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -292,10 +323,54 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
 
   const q = query.trim().toLowerCase();
   const active = FILTERS.find((f) => f.id === filter)!;
+  const matchesCategory = (t: Task) => {
+    if (categoryFilter === "") return true;
+    if (categoryFilter === "none") return t.category == null;
+    return t.category === categoryFilter;
+  };
   const rows = store.all.filter(
-    (t) => active.match(t) && (q === "" || t.filename.toLowerCase().includes(q)),
+    (t) =>
+      active.match(t) &&
+      matchesCategory(t) &&
+      (q === "" || t.filename.toLowerCase().includes(q)),
   );
   const sorted = sortRows(rows, sortStack, store.speeds);
+
+  // Apply the reorder cooldown: rows that just moved hold their slot for a beat
+  // so the list doesn't churn as live values cross. A sort-criteria change resets
+  // it (the reset runs during render so the new sort applies immediately).
+  const displayOrderRef = useRef<string[]>([]);
+  const movedAtRef = useRef<Map<string, number>>(new Map());
+  const prevSortRef = useRef(sortStack);
+  if (prevSortRef.current !== sortStack) {
+    prevSortRef.current = sortStack;
+    displayOrderRef.current = [];
+    movedAtRef.current.clear();
+  }
+  const displayIds = reorderWithCooldown(
+    sorted.map((t) => t.id),
+    displayOrderRef.current,
+    movedAtRef.current,
+    performance.now(),
+  );
+  const byId = new Map(rows.map((t) => [t.id, t]));
+  const displayed = displayIds
+    .map((id) => byId.get(id))
+    .filter((t): t is Task => t != null);
+  useLayoutEffect(() => {
+    const now = performance.now();
+    const movedAt = movedAtRef.current;
+    const prevIdx = new Map(displayOrderRef.current.map((id, i) => [id, i]));
+    displayIds.forEach((id, i) => {
+      const p = prevIdx.get(id);
+      if (p !== undefined && p !== i) movedAt.set(id, now);
+    });
+    const alive = new Set(displayIds);
+    for (const id of Array.from(movedAt.keys())) {
+      if (!alive.has(id)) movedAt.delete(id);
+    }
+    displayOrderRef.current = displayIds;
+  });
 
   const counts: Record<FilterId, number> = {
     all: 0,
@@ -355,7 +430,7 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
         el.style.transition = "none";
         el.style.transform = `translateY(${prev - top}px)`;
         requestAnimationFrame(() => {
-          el.style.transition = "transform 320ms cubic-bezier(0.2, 0.9, 0.3, 1)";
+          el.style.transition = "transform 240ms cubic-bezier(0.2, 0.9, 0.3, 1)";
           el.style.transform = "";
         });
       }
@@ -382,7 +457,7 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   const toggle = (id: string) =>
     setExpanded((prev) => (prev === id ? null : id));
 
-  const orderedIds = sorted.map((t) => t.id);
+  const orderedIds = displayIds;
   const sel = useListSelection({
     containerRef: listRef,
     orderedIds,
@@ -396,7 +471,11 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   const toneOf = (id: string): string | null => {
     const t = taskById.get(id);
     if (!t) return null;
-    return t.archived ? "var(--accent)" : STATUS_TONE[t.status];
+    // The card's glow follows its category color when it has one, matching the
+    // background tint; uncategorized rows get a neutral white glow.
+    const cat = findCategory(store.categories, t.category);
+    if (cat?.color) return categorySwatch(cat.color);
+    return "white";
   };
 
   // Ctrl/Cmd+A selects everything visible; Esc clears (unless a menu owns Esc).
@@ -680,6 +759,27 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
                 ),
               }))}
             />
+            {store.categories.length > 0 && (
+              <Select
+                value={categoryFilter}
+                ariaLabel="Filter by category"
+                caret
+                onChange={setCategoryFilter}
+                options={[
+                  { value: "", label: "All categories" },
+                  { value: "none", label: "Uncategorized" },
+                  ...store.categories.map((c) => ({
+                    value: c.id,
+                    label: (
+                      <span className="accent-option">
+                        <CategoryIcon icon={c.icon} color={c.color} size={16} />
+                        {c.name}
+                      </span>
+                    ),
+                  })),
+                ]}
+              />
+            )}
           </div>
           <input
             className="dl-search selectable"
@@ -741,7 +841,7 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
               </div>
             }
           >
-            {sorted.map((t) => (
+            {displayed.map((t) => (
               <Card
                 key={t.id}
                 task={t}
@@ -751,6 +851,7 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
                 archived={isArchived}
                 columns={columns}
                 gridTemplate={gridTemplate}
+                categories={store.categories}
                 onContext={openMenu}
               />
             ))}
@@ -877,6 +978,7 @@ interface CardProps {
   archived: boolean;
   columns: Column[];
   gridTemplate: string;
+  categories: Category[];
   onContext: (e: ReactMouseEvent, task: Task) => void;
 }
 
@@ -888,8 +990,10 @@ function Card({
   archived,
   columns,
   gridTemplate,
+  categories,
   onContext,
 }: CardProps) {
+  const cat = findCategory(categories, task.category);
   const pct = percent(task.received, task.total);
   const remaining = task.total != null ? task.total - task.received : null;
   const dl = task.status === "downloading";
@@ -920,7 +1024,12 @@ function Card({
       case "name":
         return (
           <span className="dl-c-name" title={task.filename}>
-            {task.filename}
+            {cat && (
+              <span className="dl-name-icon">
+                <CategoryIcon icon={cat.icon} color={cat.color} size={15} />
+              </span>
+            )}
+            <span className="dl-name-text">{task.filename}</span>
           </span>
         );
       case "size":
@@ -992,6 +1101,11 @@ function Card({
       }${archived ? " archived" : ""}`}
       data-id={task.id}
       data-status={task.status}
+      style={
+        cat?.color
+          ? ({ "--cat": categorySwatch(cat.color) } as CSSProperties)
+          : undefined
+      }
       onContextMenu={(e) => onContext(e, task)}
     >
       <div
@@ -1013,7 +1127,7 @@ function Card({
                 {task.total != null ? ` of ${formatBytes(task.total)}` : ""}
               </span>
             </div>
-            <div className="detail-item">
+            <div className="detail-item right">
               <span className="dk">Added</span>
               <span className="dv">{formatDate(task.created_at)}</span>
             </div>
@@ -1025,7 +1139,7 @@ function Card({
                   : "—"}
               </span>
             </div>
-            <div className="detail-item">
+            <div className="detail-item right">
               <span className="dk">Time spent</span>
               <span className="dv">{formatDuration(task.active_ms)}</span>
             </div>
@@ -1035,6 +1149,19 @@ function Card({
                 <span className="dv">{backendLabel(task.backend)}</span>
               </div>
             )}
+            {(() => {
+              const cat = findCategory(categories, task.category);
+              if (!cat) return null;
+              return (
+                <div className="detail-item right">
+                  <span className="dk">Category</span>
+                  <span className="dv cat-tag">
+                    <CategoryIcon icon={cat.icon} color={cat.color} size={14} />
+                    {cat.name}
+                  </span>
+                </div>
+              );
+            })()}
             <div className="detail-item wide">
               <span className="dk">Saved to</span>
               <span className="dv path selectable">{task.dest}</span>
