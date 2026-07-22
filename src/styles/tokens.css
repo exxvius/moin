@@ -1,0 +1,272 @@
+/* Design tokens — a dark, glassy system with gradient hairlines and ambient
+   glow. Theme-aware: dark is the primary look; light stays clean and flat. */
+
+:root {
+  --font-sans:
+    "DM Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", "Fira Code",
+    Consolas, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.5rem;
+  --text-2xl: clamp(1.75rem, 1.2rem + 2vw, 2.5rem);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-8: 48px;
+
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 18px;
+
+  --duration-fast: 120ms;
+  --duration: 240ms;
+  --ease: cubic-bezier(0.2, 0.9, 0.3, 1);
+
+  --ok: oklch(76% 0.16 158);
+  --warn: oklch(83% 0.15 85);
+  --bad: oklch(68% 0.2 25);
+  --info: oklch(76% 0.12 210);
+  --violet: oklch(74% 0.15 290);
+
+  /* Accent is derived from a single hue + chroma so the whole theme (background
+     tint, progress bar, buttons, glows) can be recolored by one attribute while
+     each mode keeps its own lightness. Status colors above are intentionally
+     independent of this. Default = blue (moin's own identity). Overridden by
+     [data-accent] presets. */
+  --accent-h: 258;
+  --accent-c: 0.15;
+}
+
+/* ---- Dark (primary) ---- */
+:root,
+:root[data-theme="dark"] {
+  --bg: oklch(16% 0.02 var(--accent-h));
+  --bg-2: oklch(13% 0.018 var(--accent-h));
+  --bg-elev: oklch(22% 0.022 var(--accent-h) / 0.55);
+  --bg-elev-2: oklch(26% 0.022 var(--accent-h) / 0.5);
+  --surface: oklch(80% 0.02 var(--accent-h) / 0.06);
+
+  --text: oklch(96% 0.006 240);
+  --text-dim: oklch(74% 0.012 240);
+  --text-faint: oklch(60% 0.014 240);
+
+  --accent: oklch(80% var(--accent-c) var(--accent-h));
+  --accent-2: oklch(
+    72% calc(var(--accent-c) + 0.02) calc(var(--accent-h) + 10)
+  );
+  --accent-quiet: oklch(80% var(--accent-c) var(--accent-h) / 0.14);
+  --accent-ink: oklch(18% 0.04 calc(var(--accent-h) + 25));
+
+  --border: oklch(100% 0 0 / 0.08);
+  --border-strong: oklch(100% 0 0 / 0.16);
+
+  /* Glass surfaces */
+  --glass-bg: linear-gradient(
+    160deg,
+    oklch(94% 0.03 var(--accent-h) / 0.08) 0%,
+    oklch(94% 0.02 var(--accent-h) / 0.028) 40%,
+    oklch(94% 0.015 var(--accent-h) / 0.012) 100%
+  );
+  --glass-border: oklch(100% 0 0 / 0.1);
+  --glass-highlight: inset 0 1px 0 oklch(100% 0 0 / 0.09);
+  --glass-shadow: 0 22px 48px -28px oklch(0% 0 0 / 0.8);
+  --blur: blur(16px) saturate(1.2);
+
+  --accent-grad: linear-gradient(
+    180deg,
+    oklch(85% var(--accent-c) var(--accent-h)),
+    oklch(68% calc(var(--accent-c) + 0.03) calc(var(--accent-h) + 10))
+  );
+  --accent-glow:
+    0 10px 28px -8px
+      oklch(72% calc(var(--accent-c) + 0.02) calc(var(--accent-h) + 5) / 0.55),
+    inset 0 1px 0 oklch(100% 0 0 / 0.35);
+
+  --shadow:
+    0 1px 2px oklch(0% 0 0 / 0.4), 0 14px 34px -18px oklch(0% 0 0 / 0.55);
+
+  /* Form controls & floating menus — theme-aware so light mode isn't dark. */
+  --control-bg: oklch(0% 0 0 / 0.22);
+  --control-shadow: inset 0 1px 2px oklch(0% 0 0 / 0.3);
+  --menu-bg: oklch(19% 0.02 var(--accent-h) / 0.98);
+  --menu-border: var(--border-strong);
+  --track-bg: oklch(0% 0 0 / 0.28);
+  --track-shadow: inset 0 1px 2px oklch(0% 0 0 / 0.35);
+  color-scheme: dark;
+}
+
+/* ---- Light ---- */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: oklch(97% 0.008 var(--accent-h));
+    --bg-2: oklch(94% 0.011 var(--accent-h));
+    --bg-elev: oklch(99% 0.01 var(--accent-h) / 0.72);
+    --bg-elev-2: oklch(99% 0.008 var(--accent-h) / 0.86);
+    --surface: oklch(30% 0.02 var(--accent-h) / 0.04);
+    --text: oklch(24% 0.02 250);
+    --text-dim: oklch(44% 0.015 250);
+    --text-faint: oklch(56% 0.014 250);
+    --accent: oklch(58% var(--accent-c) var(--accent-h));
+    --accent-2: oklch(
+      52% calc(var(--accent-c) + 0.01) calc(var(--accent-h) + 10)
+    );
+    --accent-quiet: oklch(58% var(--accent-c) var(--accent-h) / 0.12);
+    --accent-ink: oklch(99% 0.01 var(--accent-h));
+    --border: oklch(0% 0 0 / 0.1);
+    --border-strong: oklch(0% 0 0 / 0.18);
+    --glass-bg: linear-gradient(
+      160deg,
+      oklch(99% 0.012 var(--accent-h) / 0.85),
+      oklch(99% 0.006 var(--accent-h) / 0.62)
+    );
+    --glass-border: oklch(0% 0 0 / 0.08);
+    --glass-highlight: inset 0 1px 0 oklch(100% 0 0 / 0.7);
+    --glass-shadow: 0 16px 34px -22px oklch(0% 0 0 / 0.22);
+    --blur: blur(14px) saturate(1.1);
+    --accent-grad: linear-gradient(
+      180deg,
+      oklch(64% var(--accent-c) var(--accent-h)),
+      oklch(52% calc(var(--accent-c) + 0.01) calc(var(--accent-h) + 10))
+    );
+    --accent-glow:
+      0 10px 24px -10px
+        oklch(58% var(--accent-c) calc(var(--accent-h) + 5) / 0.5),
+      inset 0 1px 0 oklch(100% 0 0 / 0.4);
+    --shadow:
+      0 1px 2px oklch(0% 0 0 / 0.08), 0 14px 30px -18px oklch(0% 0 0 / 0.14);
+    --control-bg: oklch(100% 0 0 / 0.6);
+    --control-shadow: inset 0 1px 2px oklch(0% 0 0 / 0.05);
+    --menu-bg: oklch(99% 0.008 var(--accent-h) / 0.98);
+    --menu-border: var(--border-strong);
+    --track-bg: oklch(0% 0 0 / 0.08);
+    --track-shadow: inset 0 1px 2px oklch(0% 0 0 / 0.08);
+    color-scheme: light;
+  }
+}
+
+:root[data-theme="light"] {
+  --bg: oklch(97% 0.008 var(--accent-h));
+  --bg-2: oklch(94% 0.011 var(--accent-h));
+  --bg-elev: oklch(99% 0.01 var(--accent-h) / 0.72);
+  --bg-elev-2: oklch(99% 0.008 var(--accent-h) / 0.86);
+  --surface: oklch(30% 0.02 var(--accent-h) / 0.04);
+  --text: oklch(24% 0.02 250);
+  --text-dim: oklch(44% 0.015 250);
+  --text-faint: oklch(56% 0.014 250);
+  --accent: oklch(58% var(--accent-c) var(--accent-h));
+  --accent-2: oklch(
+    52% calc(var(--accent-c) + 0.01) calc(var(--accent-h) + 10)
+  );
+  --accent-quiet: oklch(58% var(--accent-c) var(--accent-h) / 0.12);
+  --accent-ink: oklch(99% 0.01 var(--accent-h));
+  --border: oklch(0% 0 0 / 0.1);
+  --border-strong: oklch(0% 0 0 / 0.18);
+  --glass-bg: linear-gradient(
+    160deg,
+    oklch(99% 0.012 var(--accent-h) / 0.85),
+    oklch(99% 0.006 var(--accent-h) / 0.62)
+  );
+  --glass-border: oklch(0% 0 0 / 0.08);
+  --glass-highlight: inset 0 1px 0 oklch(100% 0 0 / 0.7);
+  --glass-shadow: 0 16px 34px -22px oklch(0% 0 0 / 0.22);
+  --blur: blur(14px) saturate(1.1);
+  --accent-grad: linear-gradient(
+    180deg,
+    oklch(64% var(--accent-c) var(--accent-h)),
+    oklch(52% calc(var(--accent-c) + 0.01) calc(var(--accent-h) + 10))
+  );
+  --accent-glow:
+    0 10px 24px -10px oklch(58% var(--accent-c) calc(var(--accent-h) + 5) / 0.5),
+    inset 0 1px 0 oklch(100% 0 0 / 0.4);
+  --shadow:
+    0 1px 2px oklch(0% 0 0 / 0.08), 0 14px 30px -18px oklch(0% 0 0 / 0.14);
+  --control-bg: oklch(100% 0 0 / 0.6);
+  --control-shadow: inset 0 1px 2px oklch(0% 0 0 / 0.05);
+  --menu-bg: oklch(99% 0.008 var(--accent-h) / 0.98);
+  --menu-border: var(--border-strong);
+  --track-bg: oklch(0% 0 0 / 0.08);
+  --track-shadow: inset 0 1px 2px oklch(0% 0 0 / 0.08);
+  color-scheme: light;
+}
+
+/* ---- Accent presets — recolor the whole theme from one attribute. Each sets
+   only hue + chroma; both light and dark derive their accent from these, and the
+   status colors (--ok/--warn/--bad/--info) stay independent. ---- */
+:root[data-accent="emerald"] {
+  --accent-h: 165;
+  --accent-c: 0.14;
+}
+:root[data-accent="green"] {
+  --accent-h: 150;
+  --accent-c: 0.15;
+}
+:root[data-accent="lime"] {
+  --accent-h: 128;
+  --accent-c: 0.16;
+}
+:root[data-accent="teal"] {
+  --accent-h: 195;
+  --accent-c: 0.13;
+}
+:root[data-accent="cyan"] {
+  --accent-h: 215;
+  --accent-c: 0.13;
+}
+:root[data-accent="sky"] {
+  --accent-h: 235;
+  --accent-c: 0.13;
+}
+:root[data-accent="blue"] {
+  --accent-h: 258;
+  --accent-c: 0.15;
+}
+:root[data-accent="indigo"] {
+  --accent-h: 278;
+  --accent-c: 0.16;
+}
+:root[data-accent="violet"] {
+  --accent-h: 296;
+  --accent-c: 0.16;
+}
+:root[data-accent="purple"] {
+  --accent-h: 315;
+  --accent-c: 0.17;
+}
+:root[data-accent="fuchsia"] {
+  --accent-h: 328;
+  --accent-c: 0.18;
+}
+:root[data-accent="magenta"] {
+  --accent-h: 342;
+  --accent-c: 0.19;
+}
+:root[data-accent="pink"] {
+  --accent-h: 355;
+  --accent-c: 0.16;
+}
+:root[data-accent="rose"] {
+  --accent-h: 12;
+  --accent-c: 0.17;
+}
+:root[data-accent="red"] {
+  --accent-h: 28;
+  --accent-c: 0.2;
+}
+:root[data-accent="orange"] {
+  --accent-h: 52;
+  --accent-c: 0.15;
+}
+:root[data-accent="amber"] {
+  --accent-h: 78;
+  --accent-c: 0.14;
+}

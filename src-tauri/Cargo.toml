@@ -1,0 +1,45 @@
+[package]
+name = "moin"
+version = "0.1.0"
+description = "A general downloader with a built-in BitTorrent client."
+authors = ["moin contributors"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77"
+
+# The library holds the whole app so the engine can be unit-tested without the
+# Tauri shell. `main.rs` is a thin binary that calls into it.
+[lib]
+name = "moin_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# Async runtime for the download engines (HTTP/reqwest + librqbit land in later
+# phases; Tauri already hosts a tokio runtime we build on).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "io-util", "time"] }
+
+[features]
+# Enable custom protocol in production; keep default off for dev.
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+opt-level = "s"     # desktop app, optimize for size
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

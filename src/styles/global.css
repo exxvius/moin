@@ -1,0 +1,202 @@
+@import "./tokens.css";
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  color: var(--text);
+  background: linear-gradient(180deg, var(--bg), var(--bg-2));
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden; /* the app manages its own scroll regions */
+  /* Desktop app: dragging across the chrome shouldn't select UI text. Real
+     text-entry surfaces (and anything opting in with .selectable) re-enable it
+     below, so typing, editing, and copying still work where they should. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea,
+[contenteditable="true"],
+.selectable {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+:root {
+  --par-x: 0;
+  --par-y: 0;
+}
+
+/* Ambient colour bends — four soft blobs, each with a radius larger than half
+   the screen (vmax units) so they always overlap and interact in the middle,
+   regardless of window size. Each drifts and swells on its own long loop, and
+   shifts with the cursor (parallax). Parallax rides the `translate` property
+   while the drift animates `transform`, so the two compose. Kept low-alpha so
+   the interplay in the centre never hurts text readability. */
+.lava {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+.lava i {
+  position: absolute;
+  width: 140vmax;
+  height: 140vmax;
+  margin: -70vmax 0 0 -70vmax; /* center the blob on its left/top anchor */
+  border-radius: 50%;
+  will-change: transform, translate;
+  transition: translate 600ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.lava i:nth-child(1) {
+  left: 20%;
+  top: 18%;
+  background: radial-gradient(
+    closest-side,
+    oklch(64% 0.15 var(--accent-h) / 0.06),
+    transparent 70%
+  );
+  translate: calc(var(--par-x) * 22px) calc(var(--par-y) * 18px);
+  animation: lava-1 52s ease-in-out infinite;
+}
+.lava i:nth-child(2) {
+  left: 82%;
+  top: 15%;
+  background: radial-gradient(
+    closest-side,
+    oklch(62% 0.16 calc(var(--accent-h) - 34) / 0.05),
+    transparent 70%
+  );
+  translate: calc(var(--par-x) * 34px) calc(var(--par-y) * 26px);
+  animation: lava-2 64s ease-in-out infinite;
+}
+.lava i:nth-child(3) {
+  left: 84%;
+  top: 84%;
+  background: radial-gradient(
+    closest-side,
+    oklch(60% 0.16 calc(var(--accent-h) + 54) / 0.05),
+    transparent 70%
+  );
+  translate: calc(var(--par-x) * 28px) calc(var(--par-y) * 22px);
+  animation: lava-3 57s ease-in-out infinite;
+}
+.lava i:nth-child(4) {
+  left: 16%;
+  top: 82%;
+  background: radial-gradient(
+    closest-side,
+    oklch(66% 0.15 calc(var(--accent-h) + 24) / 0.045),
+    transparent 70%
+  );
+  translate: calc(var(--par-x) * 42px) calc(var(--par-y) * 32px);
+  animation: lava-4 74s ease-in-out infinite;
+}
+@keyframes lava-1 {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(7%, 5%) scale(1.16);
+  }
+}
+@keyframes lava-2 {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1.1);
+  }
+  50% {
+    transform: translate(-6%, 7%) scale(0.95);
+  }
+}
+@keyframes lava-3 {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(-7%, -6%) scale(1.18);
+  }
+}
+@keyframes lava-4 {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1.08);
+  }
+  50% {
+    transform: translate(6%, -7%) scale(0.96);
+  }
+}
+
+::selection {
+  background: var(--accent-quiet);
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  color: inherit;
+}
+
+a {
+  color: var(--accent);
+}
+
+code,
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+/* Scrollbars */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Focus ring — visible and designed, not the UA default */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

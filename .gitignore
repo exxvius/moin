@@ -1,0 +1,33 @@
+# --- Rust / Tauri ---
+/src-tauri/target/
+/src-tauri/gen/
+/src-tauri/icons/android/
+/src-tauri/icons/ios/
+**/*.rs.bk
+
+# --- Node / web ---
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# --- App-managed binaries (yt-dlp / ffmpeg are fetched on demand, never committed) ---
+/src-tauri/bin/
+
+# --- Runtime state (never commit a user's downloads DB / logs) ---
+*.db
+*.db-shm
+*.db-wal
+*.log
+moin.lock
+
+# --- Internal planning docs (not public-facing) ---
+/docs/plans/
+
+# --- Editor / OS ---
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db

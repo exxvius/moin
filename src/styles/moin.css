@@ -1,0 +1,69 @@
+/* moin-specific view helpers. Built on the shared design tokens so it stays
+   cohesive with the rest of the app. Kept separate from app.css, which we'll
+   trim to what moin actually uses as the real views land. */
+
+.dim {
+  color: var(--text-dim);
+  margin: var(--space-2) 0 0;
+}
+
+/* ---- Settings rows ---- */
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+}
+.setting-row + .accent-grid {
+  margin-top: var(--space-2);
+}
+.setting-label {
+  font-weight: 600;
+}
+.setting-row .dim {
+  margin-top: 2px;
+  font-size: var(--text-sm);
+}
+
+/* ---- Accent picker ---- */
+.accent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: var(--space-2);
+}
+.accent-swatch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--control-bg);
+  box-shadow: var(--control-shadow);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    color var(--duration-fast) var(--ease),
+    transform var(--duration-fast) var(--ease);
+}
+.accent-swatch:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.accent-swatch.on {
+  color: var(--text);
+  border-color: var(--accent);
+  box-shadow: var(--control-shadow), 0 0 0 1px var(--accent);
+}
+.accent-swatch .dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--sw);
+  box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.15);
+  flex: none;
+}
