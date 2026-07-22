@@ -1,0 +1,58 @@
+{
+  "manifest_version": 3,
+  "name": "moin — download capture",
+  "version": "0.1.0",
+  "description": "Send your browser's downloads to moin, cookies and all — with a right-click or automatically.",
+  "permissions": [
+    "downloads",
+    "contextMenus",
+    "cookies",
+    "storage",
+    "notifications",
+    "tabs",
+    "webRequest",
+    "webRequestBlocking"
+  ],
+  "host_permissions": ["http://127.0.0.1/*", "<all_urls>"],
+  "background": {
+    "scripts": ["src/shared.js", "src/background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "options_ui": {
+    "page": "src/options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_title": "moin",
+    "default_icon": {
+      "16": "icons/icon-32.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "moin-capture@moin.local",
+      "strict_min_version": "121.0"
+    }
+  }
+}

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>moin extension — options</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <header class="head">
+        <img class="mark" src="../icons/icon-128.png" alt="" />
+        <div>
+          <h1>moin</h1>
+          <p class="dim">Send downloads from your browser to moin.</p>
+        </div>
+      </header>
+
+      <section class="card">
+        <h2>Pairing</h2>
+        <p class="dim">
+          Match these to moin's <strong>Settings → Browser integration</strong>.
+          Copy the access token from there and paste it below.
+        </p>
+
+        <label class="field">
+          <span class="label">Port</span>
+          <input id="port" type="number" min="1" max="65535" inputmode="numeric" />
+        </label>
+
+        <label class="field">
+          <span class="label">Access token</span>
+          <input id="token" type="text" spellcheck="false" placeholder="Paste from moin" />
+        </label>
+
+        <div class="test-row">
+          <button id="test" class="btn">Test connection</button>
+          <span id="status" class="status dim">Not tested yet</span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Capture</h2>
+
+        <label class="toggle-row">
+          <span>
+            <span class="label">Enable moin capture</span>
+            <span class="dim">The master switch for this extension.</span>
+          </span>
+          <input id="enabled" type="checkbox" class="switch" />
+        </label>
+
+        <label class="toggle-row">
+          <span>
+            <span class="label">Auto-capture downloads</span>
+            <span class="dim">
+              Intercept the browser's own downloads and hand them to moin. Turn
+              off to capture only via right-click → “Download with moin”.
+            </span>
+          </span>
+          <input id="autoCapture" type="checkbox" class="switch" />
+        </label>
+      </section>
+
+      <p class="foot dim">
+        Settings save as you change them. moin must be running (or set to launch
+        on demand) for capture to work.
+      </p>
+    </main>
+    <script src="shared.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Launch moin?</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f4f6fb;
+        --card: #ffffff;
+        --text: #1a1d24;
+        --dim: #5b6472;
+        --border: #dfe3ec;
+        --accent: #3b82f6;
+        --accent-text: #ffffff;
+        --ghost: #eef1f7;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f1218;
+          --card: #171b23;
+          --text: #eef1f7;
+          --dim: #9aa4b2;
+          --border: #262c38;
+          --accent: #4b93ff;
+          --ghost: #222835;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font:
+          14px/1.5 system-ui,
+          -apple-system,
+          Segoe UI,
+          Roboto,
+          sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        display: flex;
+        min-height: 100vh;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+      .card {
+        width: 100%;
+        max-width: 380px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 22px 22px 18px;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.16);
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .mark {
+        width: 34px;
+        height: 34px;
+        flex: none;
+        border-radius: 9px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 650;
+      }
+      p {
+        margin: 0 0 6px;
+        color: var(--dim);
+      }
+      .file {
+        margin: 4px 0 18px;
+        padding: 8px 12px;
+        background: var(--ghost);
+        border-radius: 8px;
+        font-size: 13px;
+        word-break: break-all;
+        max-height: 3.2em;
+        overflow: hidden;
+      }
+      .actions {
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+      }
+      button {
+        font: inherit;
+        font-weight: 600;
+        padding: 9px 16px;
+        border-radius: 9px;
+        border: 1px solid var(--border);
+        background: var(--ghost);
+        color: var(--text);
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--accent-text);
+      }
+      button:hover {
+        filter: brightness(1.05);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="row">
+        <img class="mark" src="../icons/icon-128.png" alt="" />
+        <h1>moin isn't running</h1>
+      </div>
+      <p>Launch moin and send it this download?</p>
+      <div class="file" id="file">this download</div>
+      <div class="actions">
+        <button id="cancel">Not now</button>
+        <button id="launch" class="primary">Launch moin</button>
+      </div>
+    </div>
+    <script src="prompt.js"></script>
+  </body>
+</html>
