@@ -21,10 +21,6 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use super::backend::{Control, Outcome, ProgressFn, Signal};
 use super::http::{finalize, friendly};
 
-/// Smallest slice worth its own connection. Caps the segment count so we don't
-/// open eight sockets to fetch a few hundred kilobytes.
-const MIN_SEGMENT: u64 = 256 * 1024;
-
 /// How long a worker waits on the socket before waking to re-check pause/cancel.
 const POLL: Duration = Duration::from_secs(2);
 /// Consecutive stalls (~`POLL` each) before a worker calls the connection dead.
@@ -79,7 +75,8 @@ pub async fn plan_matches(meta_path: &str, part: &str, total: u64) -> bool {
 }
 
 /// Download `total` bytes of `url` into `part` across up to `connections` ranges,
-/// then rename to `dest`. Resumes from `meta_path` when it holds a matching plan.
+/// each no smaller than `min_segment`, then rename to `dest`. Resumes from
+/// `meta_path` when it holds a matching plan.
 #[allow(clippy::too_many_arguments)]
 pub async fn download(
     client: &Client,
@@ -89,6 +86,7 @@ pub async fn download(
     meta_path: &str,
     total: u64,
     connections: usize,
+    min_segment: u64,
     control: &Control,
     progress: &ProgressFn,
 ) -> Outcome {
@@ -99,7 +97,7 @@ pub async fn download(
             None => return Outcome::Failed("couldn't read the resume plan".to_string()),
         }
     } else {
-        let segs = split(total, connections);
+        let segs = split(total, connections, min_segment);
         if let Err(e) = preallocate(part, total).await {
             return Outcome::Failed(e);
         }
@@ -273,9 +271,9 @@ impl Worker {
 }
 
 /// Divide `[0, total)` into at most `connections` contiguous segments, each no
-/// smaller than [`MIN_SEGMENT`]. `connections` is assumed to be at least 1.
-fn split(total: u64, connections: usize) -> Vec<Seg> {
-    let capacity = (total / MIN_SEGMENT).max(1);
+/// smaller than `min_segment`. `connections` is assumed to be at least 1.
+fn split(total: u64, connections: usize, min_segment: u64) -> Vec<Seg> {
+    let capacity = (total / min_segment.max(1)).max(1);
     let count = (connections as u64).clamp(1, capacity) as usize;
     let base = total / count as u64;
 
@@ -345,12 +343,15 @@ async fn save_meta(meta_path: &str, total: u64, segs: &[Seg]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{split, MIN_SEGMENT};
+    use super::split;
+
+    /// A representative per-segment floor for the split tests.
+    const MIN_SEGMENT: u64 = 256 * 1024;
 
     #[test]
     fn split_covers_the_whole_range_without_gaps() {
         let total = 10 * MIN_SEGMENT + 123;
-        let segs = split(total, 4);
+        let segs = split(total, 4, MIN_SEGMENT);
         assert_eq!(segs.len(), 4);
         assert_eq!(segs[0].start, 0);
         assert_eq!(segs.last().unwrap().end, total - 1);
@@ -362,13 +363,13 @@ mod tests {
     #[test]
     fn split_caps_segment_count_for_small_files() {
         // Only room for two MIN_SEGMENT slices, even if more are requested.
-        let segs = split(2 * MIN_SEGMENT, 8);
+        let segs = split(2 * MIN_SEGMENT, 8, MIN_SEGMENT);
         assert_eq!(segs.len(), 2);
     }
 
     #[test]
     fn split_never_returns_zero_segments() {
-        let segs = split(1, 8);
+        let segs = split(1, 8, MIN_SEGMENT);
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].start, 0);
         assert_eq!(segs[0].end, 0);
@@ -376,7 +377,7 @@ mod tests {
 
     #[test]
     fn fresh_segments_start_empty() {
-        let segs = split(4 * MIN_SEGMENT, 4);
+        let segs = split(4 * MIN_SEGMENT, 4, MIN_SEGMENT);
         assert!(segs.iter().all(|s| s.pos == s.start && !s.done()));
     }
 }

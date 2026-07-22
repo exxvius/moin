@@ -56,6 +56,7 @@ impl DownloadBackend for EmbeddedBackend {
                     &task.dest,
                     &task.meta_path(),
                     opts.connections.max(1),
+                    opts.min_split_size,
                     &control,
                     &progress,
                 )

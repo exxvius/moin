@@ -52,6 +52,9 @@ pub struct TransferOpts {
     /// Max parallel connections for one HTTP download. 1 = single stream.
     /// Backends that can't split (torrent, media) ignore it.
     pub connections: usize,
+    /// Smallest piece worth its own connection, in bytes. A file below this size
+    /// stays single-stream; larger files split into pieces no smaller than this.
+    pub min_split_size: u64,
 }
 
 /// How a transfer ended. The supervisor maps this onto a [`TaskStatus`].

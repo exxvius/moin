@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 
 const DEFAULT_CONCURRENCY: usize = 4;
 const DEFAULT_CONNECTIONS: usize = 8;
+/// Smallest slice worth its own connection. Below this a download stays single
+/// stream; above it, pieces never split smaller than this. 1 MiB matches aria2's
+/// minimum for `--min-split-size`, so the same value drives both engines.
+const DEFAULT_MIN_SPLIT_SIZE: u64 = 1 << 20; // 1 MiB
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -23,6 +27,11 @@ pub struct Settings {
     /// Sources that don't support ranges quietly fall back to a single stream.
     #[serde(default = "default_connections")]
     pub connections: usize,
+    /// Smallest piece worth its own connection, in bytes. Files below this size
+    /// download in a single stream; larger files split into parallel pieces no
+    /// smaller than this. Drives both the built-in engine and aria2c.
+    #[serde(default = "default_min_split_size")]
+    pub min_split_size: u64,
     /// Default destination folder; `None` means the OS Downloads folder.
     pub download_dir: Option<String>,
     /// Explicit path to a user-supplied aria2c binary (the "bring your own"
@@ -36,6 +45,10 @@ fn default_connections() -> usize {
     DEFAULT_CONNECTIONS
 }
 
+fn default_min_split_size() -> u64 {
+    DEFAULT_MIN_SPLIT_SIZE
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -43,6 +56,7 @@ impl Default for Settings {
             torrent_backend: "embedded".to_string(),
             max_concurrent: DEFAULT_CONCURRENCY,
             connections: DEFAULT_CONNECTIONS,
+            min_split_size: DEFAULT_MIN_SPLIT_SIZE,
             download_dir: None,
             aria2_path: None,
         }

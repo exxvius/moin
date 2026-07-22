@@ -128,6 +128,9 @@ impl DownloadBackend for Aria2Backend {
         };
 
         let conns = opts.connections.max(1).to_string();
+        // aria2 rejects a min-split-size below 1 MiB, so hold that as the floor —
+        // it's also the built-in engine's default, so both split the same way.
+        let min_split = opts.min_split_size.max(1 << 20).to_string();
         let gid = match rpc
             .call(
                 "aria2.addUri",
@@ -139,6 +142,7 @@ impl DownloadBackend for Aria2Backend {
                         "continue": "true",
                         "split": conns,
                         "max-connection-per-server": conns,
+                        "min-split-size": min_split,
                         "max-tries": "5",
                     }),
                 ],

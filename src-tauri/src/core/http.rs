@@ -13,14 +13,11 @@ use tokio::io::AsyncWriteExt;
 use super::backend::{Control, Outcome, ProgressFn, Signal};
 use super::segmented;
 
-/// Below this size a multi-connection download isn't worth the extra round trips,
-/// so we stream it over a single connection.
-const MIN_MULTI_SIZE: u64 = 1 << 20; // 1 MiB
-
 /// Download `url` into `part`, then rename to `dest` on success. Uses up to
 /// `connections` parallel streams when the server supports ranges and the file is
-/// large enough; otherwise a single resumable stream. `meta_path` stores the
-/// multi-connection resume plan.
+/// large enough; otherwise a single resumable stream. `min_split` is the smallest
+/// piece worth its own connection — a file below it stays single-stream, and it
+/// caps how finely a larger one is split. `meta_path` stores the resume plan.
 #[allow(clippy::too_many_arguments)]
 pub async fn download(
     client: &Client,
@@ -29,6 +26,7 @@ pub async fn download(
     dest: &str,
     meta_path: &str,
     connections: usize,
+    min_split: u64,
     control: &Control,
     progress: &ProgressFn,
 ) -> Outcome {
@@ -47,6 +45,7 @@ pub async fn download(
                 meta_path,
                 total,
                 connections,
+                min_split,
                 control,
                 progress,
             )
@@ -65,7 +64,7 @@ pub async fn download(
     // and there's no single-stream partial already on disk to preserve.
     if connections > 1 {
         if let (true, Some(total)) = (plan.ranges, plan.total) {
-            if total >= MIN_MULTI_SIZE && existing_len(part).await == 0 {
+            if total >= min_split && existing_len(part).await == 0 {
                 return segmented::download(
                     client,
                     url,
@@ -74,6 +73,7 @@ pub async fn download(
                     meta_path,
                     total,
                     connections,
+                    min_split,
                     control,
                     progress,
                 )

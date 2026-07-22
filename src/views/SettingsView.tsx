@@ -21,6 +21,11 @@ const CONCURRENCY_OPTIONS = [0, 1, 2, 3, 4, 5, 6, 8, 10, 16];
 // Parallel connections per download. 1 = a single stream (no splitting).
 const CONNECTION_OPTIONS = [1, 2, 4, 6, 8, 12, 16];
 
+// Smallest piece worth its own connection, in bytes. 1 MiB is aria2's floor, so
+// the options start there. Files below the chosen size download in one stream.
+const MIB = 1024 * 1024;
+const MIN_SPLIT_OPTIONS = [1, 2, 4, 8, 16, 32].map((m) => m * MIB);
+
 export function SettingsView({
   accent,
   setAccent,
@@ -165,8 +170,7 @@ export function SettingsView({
             <div className="dim">
               Split each file into parallel streams for faster downloads.
               Sources that don't support it fall back to a single stream
-              automatically. Set to 1 to always use one. Applies to whichever
-              engine is selected.
+              automatically. Set to 1 to always use one.
             </div>
           </div>
           <Select
@@ -178,6 +182,28 @@ export function SettingsView({
             options={CONNECTION_OPTIONS.map((n) => ({
               value: String(n),
               label: n === 1 ? "Single stream" : String(n),
+            }))}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Minimum split size</div>
+            <div className="dim">
+              A file smaller than this downloads in a single stream; larger ones
+              split into parallel pieces no smaller than this. Lower it to split
+              more eagerly.
+            </div>
+          </div>
+          <Select
+            value={String(settings?.min_split_size ?? MIB)}
+            ariaLabel="Minimum split size"
+            caret
+            disabled={!settings}
+            onChange={(v) => patch({ min_split_size: Number(v) })}
+            options={MIN_SPLIT_OPTIONS.map((n) => ({
+              value: String(n),
+              label: formatBytes(n),
             }))}
           />
         </div>
