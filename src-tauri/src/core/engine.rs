@@ -2,7 +2,7 @@
 //! selection. It's Tauri-free — it reports out through the [`Emitter`] trait,
 //! which the shell implements with `AppHandle::emit`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -111,7 +111,13 @@ impl Engine {
     /// Open the store, restore persisted tasks, and register the backends.
     pub fn new(data_dir: PathBuf, emitter: Arc<dyn Emitter>) -> Result<Self, String> {
         let store = Store::open(&data_dir)?;
-        let settings = Settings::load(&data_dir);
+        let mut settings = Settings::load(&data_dir);
+        // Mint the RPC bearer token on first run so the browser-integration server
+        // always has one to check against (and the settings UI something to show).
+        if settings.rpc_token.is_empty() {
+            settings.rpc_token = Uuid::new_v4().to_string();
+            settings.save(&data_dir);
+        }
         let categories = category::load_or_seed(&data_dir);
 
         let mut tasks = HashMap::new();
@@ -177,6 +183,7 @@ impl Engine {
         url: String,
         dir: PathBuf,
         category: Option<String>,
+        headers: BTreeMap<String, String>,
     ) -> Result<Task, String> {
         let url = url.trim().to_string();
         if url.is_empty() {
@@ -224,6 +231,7 @@ impl Engine {
                 active_ms: 0,
                 backend: None,
                 category,
+                headers,
             };
             tasks.insert(task.id.clone(), Entry::idle(task.clone()));
             task
@@ -267,9 +275,7 @@ impl Engine {
             let Some(entry) = tasks.get_mut(id) else {
                 return;
             };
-            if entry.moving
-                || entry.control.is_some()
-                || entry.task.status == TaskStatus::Completed
+            if entry.moving || entry.control.is_some() || entry.task.status == TaskStatus::Completed
             {
                 return;
             }
@@ -411,6 +417,17 @@ impl Engine {
         self.inner.settings.lock().unwrap().clone()
     }
 
+    /// Mint a fresh RPC bearer token, persist it, and return it. The server reads
+    /// the token live, so a previously-paired extension stops working the moment
+    /// this returns — the point of a regenerate.
+    pub fn regenerate_rpc_token(&self) -> String {
+        let token = Uuid::new_v4().to_string();
+        let mut s = self.inner.settings.lock().unwrap();
+        s.rpc_token = token.clone();
+        s.save(&self.inner.data_dir);
+        token
+    }
+
     pub fn set_settings(&self, next: Settings) {
         // Keep the aria2c resolver in step with the persisted override so both
         // save paths (general settings and the tool picker) agree.
@@ -481,6 +498,16 @@ impl Engine {
     pub fn suggest_category(&self, url: &str) -> Option<String> {
         use super::category::AddMethodKind;
         let cand = Candidate::from_url(url.trim(), AddMethodKind::ManualLink);
+        category::categorize(&cand, &self.inner.categories.lock().unwrap())
+    }
+
+    /// The category a browser-captured `url` should be filed under, if any. The
+    /// extension doesn't pick one, so the engine runs the same rules the manual
+    /// add does — tagged as a browser capture so source-filtered categories treat
+    /// it correctly.
+    pub fn categorize_capture(&self, url: &str) -> Option<String> {
+        use super::category::AddMethodKind;
+        let cand = Candidate::from_url(url.trim(), AddMethodKind::BrowserCapture);
         category::categorize(&cand, &self.inner.categories.lock().unwrap())
     }
 
@@ -913,12 +940,7 @@ impl Inner {
     /// `category` once it lands. If the file is already in `target_dir` this is
     /// just a re-tag; otherwise the task flips to `Moving` and a background task
     /// copies the bytes, reporting progress, then `finish_move` settles it.
-    fn begin_move(
-        inner: Arc<Inner>,
-        id: String,
-        category: Option<String>,
-        target_dir: PathBuf,
-    ) {
+    fn begin_move(inner: Arc<Inner>, id: String, category: Option<String>, target_dir: PathBuf) {
         // The category folder may not exist yet — surface a failure to create it
         // on the task and leave the file where it is.
         if let Err(e) = std::fs::create_dir_all(&target_dir) {
@@ -1246,11 +1268,7 @@ async fn rename_retry(src: &str, dst: &str) -> std::io::Result<()> {
 
 /// Stream `src` to `dst` then remove the original, calling `on_progress(moved,
 /// total)` as it copies — the cross-volume path where a rename won't do.
-async fn copy_across(
-    src: &str,
-    dst: &str,
-    on_progress: impl Fn(u64, u64),
-) -> std::io::Result<()> {
+async fn copy_across(src: &str, dst: &str, on_progress: impl Fn(u64, u64)) -> std::io::Result<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let mut reader = open_retry(src).await?;

@@ -34,7 +34,8 @@ impl Store {
                  active_ms  INTEGER NOT NULL DEFAULT 0,
                  completed_at INTEGER,
                  backend    TEXT,
-                 category   TEXT
+                 category   TEXT,
+                 headers    TEXT
              );",
         )
         .map_err(err)?;
@@ -50,6 +51,7 @@ impl Store {
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN completed_at INTEGER", []);
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN backend TEXT", []);
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN category TEXT", []);
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN headers TEXT", []);
         // Backfill a completion time for rows finished before this column existed.
         let _ = conn.execute(
             "UPDATE tasks SET completed_at = updated_at
@@ -66,7 +68,7 @@ impl Store {
             .prepare(
                 "SELECT id, kind, url, filename, dest, status, total, received, error,
                         created_at, updated_at, archived, active_ms, completed_at, backend,
-                        category
+                        category, headers
                  FROM tasks ORDER BY created_at DESC",
             )
             .map_err(err)?;
@@ -89,6 +91,10 @@ impl Store {
                     completed_at: r.get(13)?,
                     backend: r.get(14)?,
                     category: r.get(15)?,
+                    headers: r
+                        .get::<_, Option<String>>(16)?
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or_default(),
                 })
             })
             .map_err(err)?;
@@ -102,12 +108,12 @@ impl Store {
                 "INSERT INTO tasks
                    (id, kind, url, filename, dest, status, total, received, error,
                     created_at, updated_at, archived, active_ms, completed_at, backend,
-                    category)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
+                    category, headers)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
                  ON CONFLICT(id) DO UPDATE SET
                    status=?6, total=?7, received=?8, error=?9, updated_at=?11,
                    archived=?12, active_ms=?13, completed_at=?14, backend=?15,
-                   category=?16",
+                   category=?16, headers=?17",
                 params![
                     t.id,
                     kind_str(t.kind),
@@ -125,6 +131,7 @@ impl Store {
                     t.completed_at,
                     t.backend,
                     t.category,
+                    headers_json(&t.headers),
                 ],
             )
             .map_err(err)?;
@@ -141,6 +148,16 @@ impl Store {
 
 fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
+}
+
+/// Serialize a task's captured headers for storage: `None` when empty (so the
+/// column stays NULL for the common hand-added download), else a JSON object.
+fn headers_json(headers: &std::collections::BTreeMap<String, String>) -> Option<String> {
+    if headers.is_empty() {
+        None
+    } else {
+        serde_json::to_string(headers).ok()
+    }
 }
 
 fn kind_str(k: TaskKind) -> &'static str {

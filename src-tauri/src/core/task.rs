@@ -1,6 +1,8 @@
 //! The unified download task: one shape for every source (HTTP now, torrent and
 //! media later), plus its state machine. The engine and the UI both speak this.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Where a download comes from. Only HTTP is live in this phase.
@@ -94,6 +96,12 @@ pub struct Task {
     /// Id of the category this download is filed under, or `None` if uncategorized.
     #[serde(default)]
     pub category: Option<String>,
+    /// Extra HTTP request headers to send with this download — Cookie, Referer,
+    /// User-Agent and friends, captured by the browser extension so an auth-gated
+    /// link downloads the same way the browser would. Persisted, so a resume after
+    /// a restart still authenticates. Empty for hand-added links.
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
 }
 
 impl Task {

@@ -8,6 +8,7 @@
 pub mod commands;
 pub mod core;
 pub mod events;
+pub mod rpc;
 
 use std::sync::Arc;
 
@@ -40,10 +41,33 @@ impl Emitter for AppEmitter {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Must be registered first: a second launch (e.g. the browser opening
+        // `moin://launch` to wake moin) is funneled back to the running instance —
+        // its window is focused and the new process exits, so the RPC port is never
+        // double-bound.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            // Register the `moin://` scheme at runtime so it works from a dev build
+            // (the installer handles it for a packaged app). macOS registers via
+            // its bundle Info.plist instead, so it's skipped there.
+            #[cfg(any(windows, target_os = "linux"))]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                if let Err(e) = app.deep_link().register_all() {
+                    tracing::warn!("couldn't register the moin:// scheme: {e}");
+                }
+            }
+
             // Per-user data dir holds the downloads DB, settings, and logs.
             let data_dir = app
                 .path()
@@ -59,6 +83,27 @@ pub fn run() {
             });
             let engine = Engine::new(data_dir, emitter)
                 .map_err(|e| format!("failed to start the download engine: {e}"))?;
+
+            // Start the loopback RPC server the browser extension talks to. It
+            // needs the OS Downloads folder as the fallback destination (the same
+            // one the command layer uses when no explicit dir is set), plus a
+            // handle to Tauri's tokio runtime so engine-spawned transfers land on
+            // the same executor as webview-added ones. Captured by bouncing through
+            // a task on that runtime, which is the reliable way to get its handle.
+            let fallback_dir = app
+                .path()
+                .download_dir()
+                .unwrap_or_else(|_| std::env::temp_dir());
+            let (tx, rx) = std::sync::mpsc::channel();
+            tauri::async_runtime::spawn(async move {
+                let _ = tx.send(tokio::runtime::Handle::current());
+            });
+            if let Ok(rt) = rx.recv() {
+                rpc::spawn(engine.clone(), fallback_dir, rt);
+            } else {
+                tracing::warn!("couldn't capture the tokio runtime handle; browser integration off");
+            }
+
             app.manage(AppState { engine });
             Ok(())
         })
@@ -76,6 +121,7 @@ pub fn run() {
             commands::get_settings,
             commands::set_settings,
             commands::list_backends,
+            commands::regenerate_rpc_token,
             commands::default_download_dir,
             commands::tool_status,
             commands::download_tool,

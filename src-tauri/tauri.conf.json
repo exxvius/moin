@@ -47,5 +47,11 @@
       }
     }
   },
-  "plugins": {}
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["moin"]
+      }
+    }
+  }
 }

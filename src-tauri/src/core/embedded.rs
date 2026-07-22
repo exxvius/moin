@@ -68,9 +68,11 @@ impl DownloadBackend for EmbeddedBackend {
         match task.kind {
             TaskKind::Http => {
                 let client = self.client.lock().unwrap().clone();
+                let headers = http::build_headers(&task.headers);
                 http::download(
                     &client,
                     &task.url,
+                    &headers,
                     &task.part_path(),
                     &task.dest,
                     &task.meta_path(),

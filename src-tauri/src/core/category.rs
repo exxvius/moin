@@ -22,6 +22,10 @@ use super::task::filename_from_url;
 pub enum AddMethodKind {
     ManualLink,
     ManualTorrent,
+    /// Handed to moin by the browser extension. A distinct source so a category
+    /// can target (or exclude) browser captures; categories with no source filter
+    /// still match them like any other add.
+    BrowserCapture,
     WatchFolder,
     WatchUrlFile,
 }

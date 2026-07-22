@@ -5,8 +5,10 @@
 
 use std::time::Duration;
 
+use std::collections::BTreeMap;
+
 use futures_util::StreamExt;
-use reqwest::header::{CONTENT_RANGE, RANGE};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_RANGE, RANGE};
 use reqwest::Client;
 use tokio::io::AsyncWriteExt;
 
@@ -23,6 +25,7 @@ use super::segmented;
 pub async fn download(
     client: &Client,
     url: &str,
+    headers: &HeaderMap,
     part: &str,
     dest: &str,
     meta_path: &str,
@@ -33,7 +36,7 @@ pub async fn download(
     control: &Control,
     progress: &ProgressFn,
 ) -> Outcome {
-    let plan = probe(client, url).await;
+    let plan = probe(client, url, headers).await;
 
     // A saved multi-connection plan that still matches the server's size resumes
     // as segmented, always: the `.part` is pre-sized for positioned writes, and a
@@ -43,6 +46,7 @@ pub async fn download(
             return segmented::download(
                 client,
                 url,
+                headers,
                 part,
                 dest,
                 meta_path,
@@ -73,6 +77,7 @@ pub async fn download(
                 return segmented::download(
                     client,
                     url,
+                    headers,
                     part,
                     dest,
                     meta_path,
@@ -92,6 +97,7 @@ pub async fn download(
     single_stream(
         client,
         url,
+        headers,
         part,
         dest,
         hide_part,
@@ -100,6 +106,22 @@ pub async fn download(
         progress,
     )
     .await
+}
+
+/// Turn a task's captured header map into a validated [`HeaderMap`]. Invalid names
+/// or values are skipped rather than failing the download, so one malformed header
+/// can't sink an otherwise-fine transfer.
+pub(super) fn build_headers(map: &BTreeMap<String, String>) -> HeaderMap {
+    let mut out = HeaderMap::with_capacity(map.len());
+    for (name, value) in map {
+        if let (Ok(name), Ok(value)) = (
+            HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(value),
+        ) {
+            out.insert(name, value);
+        }
+    }
+    out
 }
 
 /// What a server will let us do with a URL, learned from a tiny ranged request.
@@ -112,8 +134,14 @@ struct Plan {
 
 /// Ask for a single byte with a `Range` header. A `206` back means ranges work
 /// and the `Content-Range` carries the full size; the body is dropped unread.
-async fn probe(client: &Client, url: &str) -> Plan {
-    let resp = match client.get(url).header(RANGE, "bytes=0-0").send().await {
+async fn probe(client: &Client, url: &str, headers: &HeaderMap) -> Plan {
+    let resp = match client
+        .get(url)
+        .headers(headers.clone())
+        .header(RANGE, "bytes=0-0")
+        .send()
+        .await
+    {
         Ok(r) => r,
         // Let the real transfer surface the error; assume single-stream for now.
         Err(_) => {
@@ -155,6 +183,7 @@ async fn existing_len(part: &str) -> u64 {
 async fn single_stream(
     client: &Client,
     url: &str,
+    headers: &HeaderMap,
     part: &str,
     dest: &str,
     hide_part: bool,
@@ -168,7 +197,7 @@ async fn single_stream(
         .map(|m| m.len())
         .unwrap_or(0);
 
-    let mut req = client.get(url);
+    let mut req = client.get(url).headers(headers.clone());
     if offset > 0 {
         req = req.header(RANGE, format!("bytes={offset}-"));
     }

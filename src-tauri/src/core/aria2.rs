@@ -132,22 +132,28 @@ impl DownloadBackend for Aria2Backend {
         // aria2 rejects a min-split-size below 1 MiB, so hold that as the floor —
         // it's also the built-in engine's default, so both split the same way.
         let min_split = opts.min_split_size.max(1 << 20).to_string();
+        let mut options = json!({
+            "dir": dir,
+            "out": out,
+            "continue": "true",
+            "split": conns,
+            "max-connection-per-server": conns,
+            "min-split-size": min_split,
+            "max-tries": "5",
+        });
+        // Captured browser headers (Cookie, Referer, User-Agent…) go through as
+        // aria2's `header` option — an array of raw "Name: Value" lines — so an
+        // auth-gated link downloads the same way the built-in backend sends it.
+        if !task.headers.is_empty() {
+            let lines: Vec<String> = task
+                .headers
+                .iter()
+                .map(|(name, value)| format!("{name}: {value}"))
+                .collect();
+            options["header"] = json!(lines);
+        }
         let gid = match rpc
-            .call(
-                "aria2.addUri",
-                vec![
-                    json!([task.url]),
-                    json!({
-                        "dir": dir,
-                        "out": out,
-                        "continue": "true",
-                        "split": conns,
-                        "max-connection-per-server": conns,
-                        "min-split-size": min_split,
-                        "max-tries": "5",
-                    }),
-                ],
-            )
+            .call("aria2.addUri", vec![json!([task.url]), options])
             .await
         {
             Ok(Value::String(g)) => g,

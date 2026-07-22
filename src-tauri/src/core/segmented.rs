@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use reqwest::header::RANGE;
+use reqwest::header::{HeaderMap, RANGE};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
@@ -80,6 +80,7 @@ pub async fn plan_matches(meta_path: &str, part: &str, total: u64) -> bool {
 pub async fn download(
     client: &Client,
     url: &str,
+    headers: &HeaderMap,
     part: &str,
     dest: &str,
     meta_path: &str,
@@ -124,6 +125,7 @@ pub async fn download(
         let ctx = Worker {
             client: client.clone(),
             url: url.to_string(),
+            headers: headers.clone(),
             part: part.to_string(),
             idx,
             seg: seg.clone(),
@@ -199,6 +201,7 @@ enum SegResult {
 struct Worker {
     client: Client,
     url: String,
+    headers: HeaderMap,
     part: String,
     idx: usize,
     seg: Seg,
@@ -220,7 +223,14 @@ impl Worker {
         };
 
         let range = format!("bytes={}-{}", self.seg.pos, self.seg.end);
-        let resp = match self.client.get(&self.url).header(RANGE, range).send().await {
+        let resp = match self
+            .client
+            .get(&self.url)
+            .headers(self.headers.clone())
+            .header(RANGE, range)
+            .send()
+            .await
+        {
             Ok(r) => r,
             Err(e) => return self.fail(friendly(&e)),
         };

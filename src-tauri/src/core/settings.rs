@@ -17,6 +17,9 @@ const DEFAULT_MIN_SPLIT_SIZE: u64 = 1 << 20; // 1 MiB
 const DEFAULT_STALL_TIMEOUT: u64 = 60;
 /// Seconds to wait for a connection to be established. 0 = OS default.
 const DEFAULT_CONNECT_TIMEOUT: u64 = 30;
+/// Loopback port the browser-integration RPC server listens on. A fixed default
+/// keeps the extension zero-config; the user can move it if something else has it.
+const DEFAULT_RPC_PORT: u16 = 47653;
 
 /// What happens to a download's file when it's moved to a different category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -70,6 +73,17 @@ pub struct Settings {
     /// copy, a binary beside the exe, or `PATH`.
     #[serde(default)]
     pub aria2_path: Option<String>,
+    /// Whether the loopback RPC server (the browser extension's entry point) runs.
+    /// Toggling it or changing the port takes effect on the next app start.
+    #[serde(default = "default_rpc_enabled")]
+    pub rpc_enabled: bool,
+    /// Loopback port the RPC server binds. Applied at startup.
+    #[serde(default = "default_rpc_port")]
+    pub rpc_port: u16,
+    /// Bearer token the extension must present on `/add`. Generated on first run
+    /// (see `Engine::new`) and read live, so regenerating it takes effect at once.
+    #[serde(default)]
+    pub rpc_token: String,
 }
 
 fn default_connections() -> usize {
@@ -88,6 +102,14 @@ fn default_connect_timeout() -> u64 {
     DEFAULT_CONNECT_TIMEOUT
 }
 
+fn default_rpc_enabled() -> bool {
+    true
+}
+
+fn default_rpc_port() -> u16 {
+    DEFAULT_RPC_PORT
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -102,6 +124,9 @@ impl Default for Settings {
             connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT,
             download_dir: None,
             aria2_path: None,
+            rpc_enabled: true,
+            rpc_port: DEFAULT_RPC_PORT,
+            rpc_token: String::new(),
         }
     }
 }

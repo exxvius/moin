@@ -52,9 +52,12 @@ pub async fn add_download(
     state: State<'_, AppState>,
     url: String,
     category: Option<String>,
+    headers: Option<std::collections::BTreeMap<String, String>>,
 ) -> Result<Task, String> {
     let dir = download_dir(&app, &state);
-    state.engine.add_http(url, dir, category)
+    state
+        .engine
+        .add_http(url, dir, category, headers.unwrap_or_default())
 }
 
 #[tauri::command]
@@ -119,6 +122,13 @@ pub async fn set_settings(state: State<'_, AppState>, settings: Settings) -> Res
 #[tauri::command]
 pub fn list_backends(state: State<'_, AppState>) -> Vec<BackendInfo> {
     state.engine.backends()
+}
+
+/// Mint a fresh browser-integration token and return it. Any paired extension
+/// must be re-paired with the new value.
+#[tauri::command]
+pub fn regenerate_rpc_token(state: State<'_, AppState>) -> String {
+    state.engine.regenerate_rpc_token()
 }
 
 /// Byte progress while the aria2c archive downloads.
