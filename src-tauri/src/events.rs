@@ -1,15 +1,15 @@
 //! Event names emitted to the frontend. Kept in one place so the TS side
-//! (`src/lib/events.ts`, added with the store) can mirror them exactly.
+//! (`src/lib/events.ts`) can mirror them exactly.
 //!
-//! The unified download model reports every source — HTTP, BitTorrent, media —
-//! through one progress schema, so torrent-only fields (peers/seeds/ratio) ride
-//! along as optionals. These land for real with the engine in Phase 2.
+//! Every source — HTTP now, torrent and media later — reports through this one
+//! set, so the UI treats all downloads the same. Torrent-only fields (peers,
+//! seeds, ratio) will ride along as optionals on the task payload.
 
-/// A task was added to the queue.
+/// A task was added to the queue. Payload: `Task`.
 pub const TASK_ADDED: &str = "moin-task-added";
-/// Periodic progress for an active task.
+/// Frequent progress tick for an active task. Payload: `TaskProgress`.
 pub const TASK_PROGRESS: &str = "moin-task-progress";
-/// A task finished successfully.
-pub const TASK_DONE: &str = "moin-task-done";
-/// A task failed.
-pub const TASK_ERROR: &str = "moin-task-error";
+/// A task's status changed (connecting, paused, done, failed…). Payload: `Task`.
+pub const TASK_UPDATED: &str = "moin-task-updated";
+/// A task was removed from the registry. Payload: the task id string.
+pub const TASK_REMOVED: &str = "moin-task-removed";

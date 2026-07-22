@@ -13,6 +13,7 @@ import {
   SettingsIcon,
   SunIcon,
 } from "./components/icons";
+import { StoreProvider } from "./lib/store";
 import { useTheme } from "./lib/theme";
 import { useAccent } from "./lib/accent";
 
@@ -29,13 +30,7 @@ const NAV: {
   { id: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
-const VIEWS: Record<Exclude<View, "settings">, ComponentType> = {
-  home: HomeView,
-  downloads: DownloadsView,
-  completed: CompletedView,
-};
-
-export default function App() {
+function Shell() {
   const [theme, toggleTheme] = useTheme();
   const [accent, setAccent] = useAccent();
   const [view, setView] = useState<View>("home");
@@ -87,20 +82,28 @@ export default function App() {
       </aside>
 
       <main className="main">
-        {view === "settings" ? (
+        {view === "home" && (
+          <HomeView onAdded={() => setView("downloads")} />
+        )}
+        {view === "downloads" && <DownloadsView />}
+        {view === "completed" && <CompletedView />}
+        {view === "settings" && (
           <SettingsView
             theme={theme}
             toggleTheme={toggleTheme}
             accent={accent}
             setAccent={setAccent}
           />
-        ) : (
-          (() => {
-            const Body = VIEWS[view];
-            return <Body />;
-          })()
         )}
       </main>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <StoreProvider>
+      <Shell />
+    </StoreProvider>
   );
 }

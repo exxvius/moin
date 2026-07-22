@@ -1,18 +1,41 @@
 //! moin — Tauri application entry point.
 //!
 //! The headless download engine lives in [`core`]; this module wires it to the
-//! Tauri shell (state, plugins, command handlers). `run()` is invoked by both
-//! the desktop binary (`main.rs`) and any mobile entry points Tauri generates.
-//!
-//! The tray, richer state, and the actual engines land in later phases. Right
-//! now this is a working shell: it opens the window, sets up the per-user data
-//! dir + logging, and exposes a single info command.
+//! Tauri shell (state, plugins, command handlers) and forwards engine events to
+//! the UI. `run()` is invoked by both the desktop binary (`main.rs`) and any
+//! mobile entry points Tauri generates.
 
 pub mod commands;
 pub mod core;
 pub mod events;
 
-use tauri::Manager;
+use std::sync::Arc;
+
+use tauri::{AppHandle, Emitter as _, Manager};
+
+use crate::commands::AppState;
+use crate::core::engine::{Emitter, Engine};
+use crate::core::task::{Task, TaskProgress};
+
+/// Bridges the engine's [`Emitter`] onto Tauri's event system.
+struct AppEmitter {
+    app: AppHandle,
+}
+
+impl Emitter for AppEmitter {
+    fn added(&self, task: &Task) {
+        let _ = self.app.emit(events::TASK_ADDED, task);
+    }
+    fn progress(&self, p: &TaskProgress) {
+        let _ = self.app.emit(events::TASK_PROGRESS, p);
+    }
+    fn updated(&self, task: &Task) {
+        let _ = self.app.emit(events::TASK_UPDATED, task);
+    }
+    fn removed(&self, id: &str) {
+        let _ = self.app.emit(events::TASK_REMOVED, id);
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -21,8 +44,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            // Per-user data dir will hold the downloads DB, settings, logs, and
-            // any app-managed binaries (yt-dlp/ffmpeg) we fetch on demand.
+            // Per-user data dir holds the downloads DB, settings, and logs.
             let data_dir = app
                 .path()
                 .app_data_dir()
@@ -31,9 +53,26 @@ pub fn run() {
 
             init_logging(&data_dir);
             tracing::info!("moin starting, data dir: {}", data_dir.display());
+
+            let emitter = Arc::new(AppEmitter { app: app.handle().clone() });
+            let engine = Engine::new(data_dir, emitter)
+                .map_err(|e| format!("failed to start the download engine: {e}"))?;
+            app.manage(AppState { engine });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![commands::app_info])
+        .invoke_handler(tauri::generate_handler![
+            commands::app_info,
+            commands::add_download,
+            commands::list_downloads,
+            commands::pause_download,
+            commands::resume_download,
+            commands::cancel_download,
+            commands::remove_download,
+            commands::get_settings,
+            commands::set_settings,
+            commands::list_backends,
+            commands::default_download_dir,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running moin");
 }

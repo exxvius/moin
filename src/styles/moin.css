@@ -96,6 +96,180 @@
   font-size: var(--text-sm);
 }
 
+/* ---- Add form ---- */
+.add-row {
+  display: flex;
+  gap: var(--space-3);
+  align-items: stretch;
+}
+.add-input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--control-bg);
+  box-shadow: var(--control-shadow);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-base);
+}
+.add-input::placeholder {
+  color: var(--text-faint);
+}
+.add-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow:
+    var(--control-shadow),
+    0 0 0 3px var(--accent-quiet);
+}
+.btn-primary {
+  flex: none;
+  padding: var(--space-3) var(--space-5);
+  border: none;
+  border-radius: var(--radius);
+  background: var(--accent-grad);
+  color: var(--accent-ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--accent-glow);
+  transition:
+    filter var(--duration-fast) var(--ease),
+    opacity var(--duration-fast) var(--ease);
+}
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* ---- Download list ---- */
+.dl-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.dl-item {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  box-shadow: var(--glass-highlight);
+}
+.dl-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  justify-content: space-between;
+}
+.dl-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dl-badge {
+  flex: none;
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.dl-badge.ok {
+  color: var(--ok);
+}
+.dl-badge.bad {
+  color: var(--bad);
+}
+.dl-badge.warn {
+  color: var(--warn);
+}
+.dl-badge.accent {
+  color: var(--accent);
+}
+.dl-badge.dim {
+  color: var(--text-dim);
+}
+.dl-badge.faint {
+  color: var(--text-faint);
+}
+
+.dl-bar {
+  position: relative;
+  height: 6px;
+  margin: var(--space-3) 0;
+  border-radius: 999px;
+  background: var(--track-bg);
+  box-shadow: var(--track-shadow);
+  overflow: hidden;
+}
+.dl-bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: var(--accent-grad);
+  transition: width var(--duration) var(--ease);
+}
+.dl-bar.indeterminate > i {
+  width: 35%;
+  animation: dl-slide 1.2s ease-in-out infinite;
+}
+@keyframes dl-slide {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(340%);
+  }
+}
+
+.dl-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text-dim);
+}
+.dl-size {
+  font-variant-numeric: tabular-nums;
+}
+.dl-error {
+  color: var(--bad);
+  font-size: var(--text-sm);
+}
+.dl-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-2);
+}
+.dl-btn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 4px var(--space-3);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    color var(--duration-fast) var(--ease);
+}
+.dl-btn:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.dl-btn.danger:hover {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
 /* ---- Accent picker ---- */
 .accent-grid {
   display: grid;
