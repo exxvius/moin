@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 use super::backend::{Control, Outcome, ProgressFn, Signal};
+use super::fsattr;
 use super::http::{finalize, friendly};
 
 /// How long a worker waits on the socket before waking to re-check pause/cancel.
@@ -87,6 +88,7 @@ pub async fn download(
     total: u64,
     connections: usize,
     min_segment: u64,
+    hide_part: bool,
     control: &Control,
     progress: &ProgressFn,
 ) -> Outcome {
@@ -103,6 +105,9 @@ pub async fn download(
         }
         segs
     };
+    if hide_part {
+        fsattr::set_hidden(part, true);
+    }
 
     let received0: u64 = segs.iter().map(|s| s.pos - s.start).sum();
     let received = Arc::new(AtomicU64::new(received0));
@@ -140,6 +145,9 @@ pub async fn download(
         Signal::Cancel => return Outcome::Canceled,
         Signal::Pause => {
             save_meta(meta_path, total, &final_segs).await;
+            if hide_part {
+                fsattr::set_hidden(meta_path, true);
+            }
             return Outcome::Paused;
         }
         Signal::Run => {}
@@ -153,6 +161,9 @@ pub async fn download(
     });
     if let Some(err) = failure {
         save_meta(meta_path, total, &final_segs).await;
+        if hide_part {
+            fsattr::set_hidden(meta_path, true);
+        }
         return Outcome::Failed(err);
     }
 

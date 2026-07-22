@@ -586,6 +586,7 @@ impl Inner {
             TransferOpts {
                 connections: s.connections,
                 min_split_size: s.min_split_size,
+                hide_part: s.hide_part_files,
             }
         };
         let progress = Inner::make_progress(inner.clone(), id.clone());

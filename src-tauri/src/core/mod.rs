@@ -7,6 +7,7 @@ pub mod backend;
 pub mod category;
 pub mod embedded;
 pub mod engine;
+pub mod fsattr;
 pub mod http;
 pub mod segmented;
 pub mod settings;

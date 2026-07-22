@@ -32,6 +32,11 @@ pub struct Settings {
     /// smaller than this. Drives both the built-in engine and aria2c.
     #[serde(default = "default_min_split_size")]
     pub min_split_size: u64,
+    /// Hide the in-progress `.part` files while downloading (via the OS hidden
+    /// attribute, where supported — Windows now); the finished file appears when
+    /// the download completes.
+    #[serde(default)]
+    pub hide_part_files: bool,
     /// Default destination folder; `None` means the OS Downloads folder.
     pub download_dir: Option<String>,
     /// Explicit path to a user-supplied aria2c binary (the "bring your own"
@@ -57,6 +62,7 @@ impl Default for Settings {
             max_concurrent: DEFAULT_CONCURRENCY,
             connections: DEFAULT_CONNECTIONS,
             min_split_size: DEFAULT_MIN_SPLIT_SIZE,
+            hide_part_files: false,
             download_dir: None,
             aria2_path: None,
         }

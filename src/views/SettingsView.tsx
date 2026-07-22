@@ -207,6 +207,23 @@ export function SettingsView({
             }))}
           />
         </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Hide partial downloads</div>
+            <div className="dim">
+              Keep the in-progress <code>.part</code> file hidden while it
+              downloads; the finished file appears when it's done. Works where the
+              OS supports it (Windows).
+            </div>
+          </div>
+          <Switch
+            checked={settings?.hide_part_files ?? false}
+            ariaLabel="Hide partial downloads"
+            disabled={!settings}
+            onChange={(v) => patch({ hide_part_files: v })}
+          />
+        </div>
       </div>
 
       <div className="card">

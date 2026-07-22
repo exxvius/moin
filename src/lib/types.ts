@@ -52,6 +52,8 @@ export interface Settings {
   connections: number;
   /** Smallest piece worth its own connection, in bytes. Drives both engines. */
   min_split_size: number;
+  /** Hide the in-progress .part files while downloading (Windows). */
+  hide_part_files: boolean;
   download_dir: string | null;
   /** Explicit path to a user-supplied aria2c binary, else null. */
   aria2_path: string | null;

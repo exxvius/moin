@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 use super::backend::{Control, DownloadBackend, Outcome, ProgressFn, Signal, TransferOpts};
+use super::fsattr;
 use super::http;
 use super::task::{Task, TaskKind};
 use super::tool::{new_command, Aria2Tool};
@@ -154,7 +155,17 @@ impl DownloadBackend for Aria2Backend {
             Err(e) => return Outcome::Failed(format!("aria2 couldn't start the download: {e}")),
         };
 
-        poll_to_completion(&rpc, &gid, &part, &dest, &control_file, &control, &progress).await
+        poll_to_completion(
+            &rpc,
+            &gid,
+            &part,
+            &dest,
+            &control_file,
+            opts.hide_part,
+            &control,
+            &progress,
+        )
+        .await
     }
 }
 
@@ -167,10 +178,19 @@ async fn poll_to_completion(
     part: &str,
     dest: &str,
     control_file: &str,
+    hide_part: bool,
     control: &Control,
     progress: &ProgressFn,
 ) -> Outcome {
+    // Hide the .part + control file once aria2 has created them (checked each
+    // poll until it lands). `finalize` clears the attribute on the finished file.
+    let mut hidden_done = false;
     loop {
+        if hide_part && !hidden_done && tokio::fs::metadata(part).await.is_ok() {
+            fsattr::set_hidden(part, true);
+            fsattr::set_hidden(control_file, true);
+            hidden_done = true;
+        }
         // React to pause/cancel first so a remove releases the file promptly. Both
         // stop the aria2 download; pause keeps the partial for resume, cancel lets
         // the engine drop it (and we drop aria2's control sidecar).

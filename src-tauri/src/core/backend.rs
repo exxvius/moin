@@ -55,6 +55,8 @@ pub struct TransferOpts {
     /// Smallest piece worth its own connection, in bytes. A file below this size
     /// stays single-stream; larger files split into pieces no smaller than this.
     pub min_split_size: u64,
+    /// Hide the in-progress `.part` artifacts via the OS hidden attribute.
+    pub hide_part: bool,
 }
 
 /// How a transfer ended. The supervisor maps this onto a [`TaskStatus`].

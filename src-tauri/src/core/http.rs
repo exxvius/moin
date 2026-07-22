@@ -11,6 +11,7 @@ use reqwest::Client;
 use tokio::io::AsyncWriteExt;
 
 use super::backend::{Control, Outcome, ProgressFn, Signal};
+use super::fsattr;
 use super::segmented;
 
 /// Download `url` into `part`, then rename to `dest` on success. Uses up to
@@ -27,6 +28,7 @@ pub async fn download(
     meta_path: &str,
     connections: usize,
     min_split: u64,
+    hide_part: bool,
     control: &Control,
     progress: &ProgressFn,
 ) -> Outcome {
@@ -46,6 +48,7 @@ pub async fn download(
                 total,
                 connections,
                 min_split,
+                hide_part,
                 control,
                 progress,
             )
@@ -74,6 +77,7 @@ pub async fn download(
                     total,
                     connections,
                     min_split,
+                    hide_part,
                     control,
                     progress,
                 )
@@ -82,7 +86,7 @@ pub async fn download(
         }
     }
 
-    single_stream(client, url, part, dest, control, progress).await
+    single_stream(client, url, part, dest, hide_part, control, progress).await
 }
 
 /// What a server will let us do with a URL, learned from a tiny ranged request.
@@ -139,6 +143,7 @@ async fn single_stream(
     url: &str,
     part: &str,
     dest: &str,
+    hide_part: bool,
     control: &Control,
     progress: &ProgressFn,
 ) -> Outcome {
@@ -178,7 +183,12 @@ async fn single_stream(
     let start = if resuming { offset } else { 0 };
 
     let mut file = match open_part(part, resuming && start > 0).await {
-        Ok(f) => f,
+        Ok(f) => {
+            if hide_part {
+                fsattr::set_hidden(part, true);
+            }
+            f
+        }
         Err(e) => return Outcome::Failed(e),
     };
 
@@ -249,10 +259,15 @@ async fn single_stream(
     finalize(part, dest).await
 }
 
-/// Move the finished `.part` file to its final name.
+/// Move the finished `.part` file to its final name. Clears the hidden attribute
+/// so a finished download is always visible, even if the `.part` was hidden while
+/// downloading (a no-op when it wasn't).
 pub(super) async fn finalize(part: &str, dest: &str) -> Outcome {
     match tokio::fs::rename(part, dest).await {
-        Ok(()) => Outcome::Completed,
+        Ok(()) => {
+            fsattr::set_hidden(dest, false);
+            Outcome::Completed
+        }
         Err(e) => Outcome::Failed(format!("couldn't finalize file: {e}")),
     }
 }
