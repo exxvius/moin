@@ -1,7 +1,7 @@
 //! The built-in backend: reqwest for HTTP today, librqbit for BitTorrent once
 //! the torrent phase lands. It's always available and needs no external tools.
 
-use super::backend::{Control, DownloadBackend, Outcome, ProgressFn};
+use super::backend::{Control, DownloadBackend, Outcome, ProgressFn, TransferOpts};
 use super::http;
 use super::task::{Task, TaskKind};
 
@@ -40,7 +40,13 @@ impl DownloadBackend for EmbeddedBackend {
         matches!(kind, TaskKind::Http)
     }
 
-    async fn run(&self, task: Task, control: Control, progress: ProgressFn) -> Outcome {
+    async fn run(
+        &self,
+        task: Task,
+        opts: TransferOpts,
+        control: Control,
+        progress: ProgressFn,
+    ) -> Outcome {
         match task.kind {
             TaskKind::Http => {
                 http::download(
@@ -48,14 +54,14 @@ impl DownloadBackend for EmbeddedBackend {
                     &task.url,
                     &task.part_path(),
                     &task.dest,
+                    &task.meta_path(),
+                    opts.connections.max(1),
                     &control,
                     &progress,
                 )
                 .await
             }
-            _ => Outcome::Failed(
-                "the built-in backend can't handle this source yet".to_string(),
-            ),
+            _ => Outcome::Failed("the built-in backend can't handle this source yet".to_string()),
         }
     }
 }

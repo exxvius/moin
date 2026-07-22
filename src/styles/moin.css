@@ -2,10 +2,68 @@
    cohesive with the rest of the app. Kept separate from app.css, which we'll
    trim to what moin actually uses as the real views land. */
 
+/* ---- Animated sun ⇄ moon theme toggle (toggles.dev "spin") ---- */
+.sun-moon {
+  --spin: 400ms;
+  --spin-ease: cubic-bezier(0.5, 1.5, 0.6, 1);
+  overflow: visible;
+}
+.sun-moon .sm-core,
+.sun-moon .sm-beams {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.sun-moon .sm-core {
+  transition: transform var(--spin) var(--spin-ease);
+}
+.sun-moon .sm-clip {
+  d: path("M0 0h25a1 1 0 0010 10v14H0Z");
+  transition: d var(--spin) var(--spin-ease);
+}
+/* Rays lag the disc going into dark, and lead it coming back to light. */
+.sun-moon .sm-beams {
+  transition: transform var(--spin) var(--spin-ease);
+  transition-delay: calc(var(--spin) * 0.15);
+}
+:root[data-theme="dark"] .sun-moon .sm-core {
+  transform: scale(1.7);
+  transition-delay: calc(var(--spin) * 0.15);
+}
+:root[data-theme="dark"] .sun-moon .sm-clip {
+  d: path("M0 2h13a1 1 0 0010 10v14H0Z");
+  transition-delay: calc(var(--spin) * 0.15);
+}
+:root[data-theme="dark"] .sun-moon .sm-beams {
+  transform: rotate(45deg) scale(0);
+  transition-delay: 0ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sun-moon .sm-core,
+  .sun-moon .sm-clip,
+  .sun-moon .sm-beams {
+    transition: none;
+  }
+}
+
 /* ---- Icon rail (moin's navigation — a narrow, icon-only sidebar) ---- */
 .app {
   /* Override the wide sidebar column with a slim rail. */
   grid-template-columns: 64px 1fr;
+}
+
+/* ---- Page canvas ----
+   The main area is the full space beside the rail. No outer padding: each page
+   fills it edge to edge (and top to bottom), capped only by a max width on very
+   wide windows. Individual pages own their internal spacing. */
+.main {
+  padding: 0;
+}
+.view {
+  width: 100%;
+  max-width: var(--content-max);
+  min-height: 100%;
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-6) var(--space-6);
 }
 
 .rail {
@@ -94,6 +152,103 @@
 .setting-row .dim {
   margin-top: 2px;
   font-size: var(--text-sm);
+}
+
+/* ---- Right-click context menu ---- */
+.ctx-menu {
+  min-width: 190px;
+  list-style: none;
+  margin: 0;
+  padding: var(--space-1);
+  background: var(--menu-bg);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--menu-border);
+  border-radius: var(--radius);
+  box-shadow:
+    var(--glass-highlight),
+    0 20px 44px -18px oklch(0% 0 0 / 0.8);
+  z-index: 250;
+  animation: sel-in var(--duration-fast) var(--ease);
+}
+.ctx-item {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text-dim);
+  white-space: nowrap;
+  transition:
+    background var(--duration-fast) var(--ease),
+    color var(--duration-fast) var(--ease);
+}
+.ctx-item:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+.ctx-item.danger:hover {
+  background: color-mix(in oklab, var(--bad) 16%, transparent);
+  color: var(--bad);
+}
+.ctx-item.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.ctx-sep {
+  height: 1px;
+  margin: var(--space-1) var(--space-2);
+  background: var(--border);
+}
+.ctx-heading {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+}
+
+/* ---- Confirm modal ---- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  background: oklch(0% 0 0 / 0.5);
+  backdrop-filter: blur(3px);
+  animation: fade var(--duration) var(--ease);
+}
+.modal {
+  width: min(440px, 100%);
+  padding: var(--space-5);
+  border-radius: var(--radius-lg);
+  background:
+    var(--glass-bg),
+    color-mix(in oklab, var(--bg-2) 90%, transparent);
+  border: 1px solid var(--glass-border);
+  box-shadow:
+    var(--glass-highlight),
+    0 30px 60px -24px oklch(0% 0 0 / 0.7);
+  animation: sel-in var(--duration) var(--ease);
+}
+.modal-title {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  margin-bottom: var(--space-2);
+}
+.modal-body {
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
 }
 
 /* ---- Add form ---- */
@@ -270,44 +425,780 @@
   color: var(--bad);
 }
 
-/* ---- Accent picker ---- */
-.accent-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: var(--space-2);
+/* ---- Downloads page (qBittorrent-style table, themed) ---- */
+.view.downloads {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
 }
-.accent-swatch {
+.view.downloads .view-head {
+  margin-bottom: 0;
+}
+
+/* Toolbar: filter dropdowns on the left, name search on the right. More
+   dropdowns (category, tag…) will join the filter row later. */
+.dl-toolbar {
   display: flex;
   align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.filter-row {
+  display: flex;
   gap: var(--space-2);
+  flex-wrap: wrap;
+}
+/* A filter option: label on the left, muted count on the right, filling the
+   full width so the count sits flush to the edge (no trailing gap). */
+.opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  width: 100%;
+}
+.opt-count {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.dl-search {
+  margin-left: auto;
+  width: min(280px, 40vw);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--control-bg);
   box-shadow: var(--control-shadow);
-  color: var(--text-dim);
+  color: var(--text);
   font: inherit;
   font-size: var(--text-sm);
+}
+.dl-search::placeholder {
+  color: var(--text-faint);
+}
+.dl-search:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--control-shadow), 0 0 0 3px var(--accent-quiet);
+}
+
+/* The list: a fixed, responsive grid that always fits the window — no
+   horizontal scroll, no resizing. Rows are glass cards that expand on click. */
+/* Smooth-scroll container (see SmoothScroll.tsx): the view, then a separate
+   scrollbar column to its right. The view hides its native scrollbar (so it
+   spans full width, rounded corners intact); the custom bar is themed. */
+.ss {
+  --ss-bar-w: 10px;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  /* Own stacking context so the ghost/view/bar/header z-order stays local. */
+  isolation: isolate;
+  display: flex;
+  gap: var(--space-2);
+}
+/* The viewport. It doesn't scroll — content is moved by a transform — but it
+   does clip (rows translated past the top/bottom must be hidden). overflow: clip
+   plus border-radius gives the rounded corners without a scroll container. */
+.ss-view {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0; /* shrink to the container instead of the grid's min-content */
+  min-height: 0;
+  overflow: clip;
+}
+/* The moving list. A transform (not scrollTop) offsets it; keeping it on the
+   compositor makes the eased scroll cheap. */
+.ss-content {
+  will-change: transform;
+}
+/* Pinned header, floated over the viewport (a transform-scrolled list can't use
+   position: sticky). It sits outside the masked viewport so its own frost and
+   shadow aren't clipped; it spans the view width, stopping before the bar. */
+.ss-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: calc(var(--ss-bar-w) + var(--space-2));
+  z-index: 3;
+}
+/* The scrollbar, in its own column to the right of the view. */
+.ss-bar {
+  flex: none;
+  position: relative;
+  z-index: 2;
+  width: var(--ss-bar-w);
+}
+/* Glow layer: covers the viewport but sits behind it, clipped tight top/bottom
+   (so glow can't bleed over the toolbar/statusbar) yet opened at the sides so a
+   row's glow escapes left/right. Rows paint on top and hide the inner glow. */
+.dl-ghost-layer {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: calc(var(--ss-bar-w) + var(--space-2));
+  pointer-events: none;
+  clip-path: inset(0 -30px 0 -30px);
+}
+.dl-ghost {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 22px -12px
+    color-mix(in oklab, var(--tone, var(--accent)) 48%, transparent);
+  /* Fade in on appear, and out (opacity flipped by JS) when the row stops being
+     highlighted — matching the card's 360ms hover/select transitions. */
+  animation: ghost-in 360ms var(--ease);
+  transition: opacity 360ms var(--ease);
+}
+@keyframes ghost-in {
+  from {
+    opacity: 0;
+  }
+}
+.ss-thumb {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent) 60%, transparent);
+  opacity: 0;
   cursor: pointer;
   transition:
-    border-color var(--duration-fast) var(--ease),
-    color var(--duration-fast) var(--ease),
-    transform var(--duration-fast) var(--ease);
+    background var(--duration-fast) var(--ease),
+    opacity 200ms var(--ease);
 }
-.accent-swatch:hover {
+.ss-thumb:hover {
+  background: var(--accent);
+}
+/* The downloads list stacks inside the scroller. */
+.dl-scroll .ss-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+/* Rounded corners on the viewport so rows can't poke out behind the header's
+   rounded corners as they scroll under it. */
+.dl-scroll .ss-view {
+  border-radius: var(--radius-sm);
+}
+
+/* Shared column layout for the header and each card's summary. The actual
+   grid-template-columns is set inline from the visible column set (see
+   DownloadsView), so header and rows always line up. */
+.dl-grid {
+  display: grid;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+}
+
+/* Floating frosted-glass header (pinned by .ss-header): the blur diffuses
+   whatever scrolls under it, and the drop shadow lifts it off the list. */
+.dl-head {
+  height: 52px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--accent) 14%, transparent),
+      color-mix(in oklab, var(--accent) 4%, transparent) 70%
+    ),
+    var(--glass-bg);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  box-shadow:
+    var(--glass-highlight),
+    0 12px 30px -14px oklch(0% 0 0 / 0.6);
   color: var(--text);
-  border-color: var(--border-strong);
 }
-.accent-swatch.on {
+.sort-th {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease);
+}
+.sort-th .th-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sort-th:hover {
+  color: var(--text-dim);
+}
+.sort-th.on {
+  color: var(--accent);
+}
+.sort-th.num {
+  justify-content: flex-end;
+}
+.sort-ind {
+  display: inline-flex;
+  flex: none;
+}
+.sort-ind.asc {
+  transform: rotate(180deg);
+}
+/* Subtle-but-clear column separators in the header. */
+.dl-head .sort-th {
+  position: relative;
+}
+.dl-head .sort-th:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  right: calc(var(--space-3) / -2);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 15px;
+  background: color-mix(in oklab, var(--text-faint) 28%, transparent);
+}
+
+/* Row cards, colour-coded via --tone by status. */
+.dl-card[data-status="downloading"],
+.dl-card[data-status="connecting"] {
+  --tone: var(--accent);
+}
+.dl-card[data-status="queued"] {
+  --tone: var(--text-dim);
+}
+.dl-card[data-status="paused"] {
+  --tone: var(--warn);
+}
+.dl-card[data-status="completed"] {
+  --tone: var(--ok);
+}
+.dl-card[data-status="failed"] {
+  --tone: var(--bad);
+}
+.dl-card[data-status="canceled"] {
+  --tone: var(--text-faint);
+}
+/* Registered so the tint's fade range can be transitioned (plain gradient
+   color-stops aren't animatable). The tone holds solid up to --tint-start, then
+   fades out to transparent by --tint-end. */
+@property --tint-start {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 0%;
+}
+@property --tint-end {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 45%;
+}
+.dl-card {
+  position: relative;
+  flex: none;
+  --tint-start: 0%;
+  --tint-end: 45%;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  background: var(--glass-bg);
+  box-shadow: var(--glass-highlight);
+  overflow: hidden;
+  transition:
+    border-color 360ms var(--ease),
+    box-shadow 360ms var(--ease),
+    /* Match the mouse-tracked border-glow bloom (--glow-radius, 360ms) so the
+       tint sweeps across the card in step with it. */
+    --tint-start 360ms var(--ease),
+    --tint-end 360ms var(--ease);
+}
+/* The tone tint lives on an overlay. At rest it fades out early (0%→30%); on
+   hover/select the whole fade range slides right (30%→100%), sweeping the tint
+   across the card. */
+.dl-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent calc(var(--tint-start) - 12%),
+    color-mix(in oklab, var(--tone, transparent) 13%, transparent)
+      var(--tint-start),
+    transparent var(--tint-end)
+  );
+}
+/* Keep the row content above the tint overlay. */
+.dl-summary,
+.dl-detail-wrap {
+  position: relative;
+  z-index: 1;
+}
+/* Hover/selected only shift the border here — the glow itself is drawn by the
+   ghost layer behind the list, so it can spill past the clipped sides. */
+.dl-card:hover,
+.dl-card.selected {
+  --tint-start: 0%;
+  --tint-end: 130%;
+  border-color: color-mix(in oklab, var(--tone, var(--accent)) 32%, var(--glass-border));
+}
+/* Selected rows get a thicker edge: an inset ring stacked on the border (so
+   nothing reflows) reads as a wider, tone-tinted border. */
+.dl-card.selected {
+  border-color: color-mix(in oklab, var(--tone, var(--accent)) 48%, var(--glass-border));
+  box-shadow:
+    var(--glass-highlight),
+    inset 0 0 0 0.5px color-mix(in oklab, var(--tone, var(--accent)) 55%, transparent);
+}
+/* Archived cards aren't status-coloured (no live status to reflect). */
+.dl-card.archived {
+  --tone: var(--accent);
+  background: var(--glass-bg);
+}
+.dl-summary {
+  height: 54px;
+  cursor: pointer;
+  user-select: none;
+}
+
+
+/* Rubber-band drag rectangle, drawn in viewport coords above the list. */
+.marquee {
+  position: fixed;
+  z-index: 150;
+  pointer-events: none;
+  border: 1px solid color-mix(in oklab, var(--accent) 70%, transparent);
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  border-radius: 3px;
+}
+
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.dl-c-name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* In-row progress. */
+.dl-c-prog {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.mini-bar {
+  /* Bar colour follows the row's status tone: --bar-light (start) → --bar-deep
+     (end) give each bar a two-tone gradient; --bar-c2 stays the highlight used
+     by the live shimmer. */
+  --bar-c: var(--tone, var(--accent));
+  --bar-c2: color-mix(in oklab, var(--tone, var(--accent)) 72%, white);
+  /* Two ends of the same tone, nudged slightly in lightness and rotated in hue
+     in OPPOSITE directions, for a subtle temperature shift across the bar. */
+  --bar-a: oklch(from var(--tone, var(--accent)) calc(l - 0.03) c calc(h - 16));
+  --bar-b: oklch(from var(--tone, var(--accent)) calc(l + 0.03) c calc(h + 16));
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--track-bg);
+  box-shadow: var(--track-shadow);
+  overflow: hidden;
+}
+.mini-bar > i {
+  display: block;
+  height: 100%;
+  width: calc(var(--p, 0) * 100%);
+  border-radius: 999px;
+  /* Subtle two-end fill (hue shifted opposite ways) plus a soft top sheen. The
+     colour band is sized to the whole TRACK (1/p of the fill) and anchored left,
+     so a row shows only the slice it has progressed through and the end colours
+     stay at consistent positions across bars of different lengths. */
+  background-image:
+    linear-gradient(100deg, var(--bar-a) 0%, var(--bar-b) 100%),
+    linear-gradient(180deg, oklch(100% 0 0 / 0.18), transparent 60%);
+  background-repeat: no-repeat;
+  background-position: left center;
+  background-size:
+    calc(100% / max(var(--p, 1), 0.0001)) 100%,
+    100% 100%;
+  box-shadow: 0 0 8px color-mix(in oklab, var(--bar-c) 45%, transparent);
+  transition: width var(--duration) var(--ease);
+}
+.mini-bar.indeterminate > i {
+  width: 35%;
+  animation: dl-slide 1.2s ease-in-out infinite;
+}
+
+/* Active (downloading) bars get live motion: a flowing shimmer sliding through
+   the fill plus a pulsing leading-edge glow that reveals toward the tip and
+   fades as the bar nears full. */
+.mini-bar.live {
+  overflow: visible; /* let the leading-edge glow bloom past the track */
+}
+.mini-bar.live > i {
+  background-image: linear-gradient(
+    100deg,
+    var(--bar-c) 0%,
+    var(--bar-c2) 30%,
+    color-mix(in oklab, var(--bar-c) 45%, white) 50%,
+    var(--bar-c2) 70%,
+    var(--bar-c) 100%
+  );
+  /* Override the static fill's no-repeat sizing: the flowing shimmer tiles. */
+  background-repeat: repeat;
+  background-size: 200% 100%;
+  box-shadow:
+    0 0 6px -2px var(--bar-c),
+    inset 0 1px 0 oklch(100% 0 0 / 0.4);
+  /* --bar-delay (set per row) phase-aligns every live bar to a shared clock. */
+  animation: bar-flow 1.8s linear infinite;
+  animation-delay: var(--bar-delay, 0ms);
+}
+.mini-bar.live::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: 0;
+  width: calc(var(--p, 0) * 100%);
+  --glow-fade: clamp(0, (1 - var(--p, 0)) * 100, 1);
+  /* Growing the painted region (not a mask) lets blur() bloom into a soft halo
+     instead of being re-clipped to a hard box. */
+  background-image: linear-gradient(90deg, transparent, var(--bar-c));
+  background-repeat: no-repeat;
+  background-position: left center;
+  background-size: 0% 100%;
+  filter: blur(6px);
+  pointer-events: none;
+  opacity: 0;
+  animation: bar-pulse 1.8s cubic-bezier(0.2, 0.9, 0.3, 1) infinite;
+  animation-delay: var(--bar-delay, 0ms);
+}
+@keyframes bar-flow {
+  from {
+    background-position: 64% 0;
+  }
+  to {
+    background-position: -136% 0;
+  }
+}
+@keyframes bar-pulse {
+  0% {
+    background-size: 0% 100%;
+    opacity: 0;
+    animation-timing-function: cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+  32% {
+    background-size: 100% 100%;
+    opacity: calc(var(--glow-fade) * 0.72);
+    animation-timing-function: cubic-bezier(0.5, 0, 1, 1);
+  }
+  100% {
+    background-size: 100% 100%;
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mini-bar.live > i,
+  .mini-bar.live::after {
+    animation: none;
+  }
+  .mini-bar.live::after {
+    background-size: 100% 100%;
+    opacity: calc(var(--glow-fade) * 0.55);
+  }
+}
+.mini-pct {
+  width: 34px;
+  text-align: right;
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Status: plain colored text, like the other cells (no pill). */
+.dl-status {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dl-status.ok {
+  color: var(--ok);
+}
+.dl-status.bad {
+  color: var(--bad);
+}
+.dl-status.warn {
+  color: var(--warn);
+}
+.dl-status.accent {
+  color: var(--accent);
+}
+.dl-status.dim {
+  color: var(--text-dim);
+}
+.dl-status.faint {
+  color: var(--text-faint);
+}
+
+/* Expanded detail: the rest of the card's info, animated open via the
+   grid-rows 0fr→1fr trick (same as sqz's collapsibles). */
+.dl-detail-wrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--duration) var(--ease);
+}
+.dl-card.open .dl-detail-wrap {
+  grid-template-rows: 1fr;
+}
+.dl-detail {
+  overflow: hidden;
+  min-height: 0;
+  opacity: 0;
+  transition: opacity var(--duration) var(--ease);
+}
+.dl-card.open .dl-detail {
+  opacity: 1;
+}
+.dl-detail-grid {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3) var(--space-5);
+}
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.detail-item.wide {
+  grid-column: 1 / -1;
+}
+.dk {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+.dv {
+  font-size: var(--text-sm);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dv.path {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  word-break: break-all;
+  white-space: normal;
+}
+.dv.err {
+  color: var(--bad);
+}
+
+.dl-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: var(--space-1);
+}
+
+/* Stats card up top. */
+.stat-card {
+  flex: none;
+}
+.stat-hero {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+.stat-hero-num {
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  line-height: 1;
+  background: linear-gradient(
+    180deg,
+    oklch(92% 0.09 var(--accent-h)),
+    var(--accent)
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.stat-hero-label {
+  color: var(--text-dim);
+}
+.stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+}
+.stat-num {
+  font-size: var(--text-xl);
+  font-weight: 600;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.stat-label {
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+}
+
+/* The list panel: a card holding the toolbar + the scrollable list. It must NOT
+   have its own backdrop-filter — a blurred ancestor cancels the header's blur. */
+.dl-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Bottom status bar — pinned to the bottom of the view. */
+.dl-statusbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+.dl-statusbar .grow {
+  flex: 1;
+}
+.dl-statusbar .sel-count {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ---- Themed select dropdown ---- */
+.sel {
+  position: relative;
+}
+.sel-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 210px;
+  max-width: 320px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--control-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
   color: var(--text);
-  border-color: var(--accent);
-  box-shadow: var(--control-shadow), 0 0 0 1px var(--accent);
+  font: inherit;
+  cursor: pointer;
+  box-shadow: var(--control-shadow);
+  transition: border-color var(--duration-fast);
 }
-.accent-swatch .dot {
-  width: 14px;
-  height: 14px;
+.sel-trigger:hover,
+.sel.open .sel-trigger {
+  border-color: color-mix(in oklab, var(--accent) 50%, var(--border-strong));
+}
+.sel-value {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.sel-caret {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-faint);
+  transition: transform var(--duration-fast) var(--ease);
+}
+.sel.open .sel-caret {
+  transform: rotate(180deg);
+}
+.sel-menu {
+  max-height: 300px;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: var(--space-1);
+  background: var(--menu-bg);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--menu-border);
+  border-radius: var(--radius);
+  box-shadow:
+    var(--glass-highlight),
+    0 20px 44px -18px oklch(0% 0 0 / 0.8);
+  z-index: 100;
+  animation: sel-in var(--duration-fast) var(--ease);
+}
+@keyframes sel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+.sel-option {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.sel-option:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+.sel-option.selected {
+  background: linear-gradient(180deg, var(--accent-quiet), transparent);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in oklab, var(--accent) 25%, transparent);
+}
+
+/* ---- Accent option (dot + label inside the select) ---- */
+.accent-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.accent-dot {
+  width: 13px;
+  height: 13px;
   border-radius: 50%;
-  background: var(--sw);
-  box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.15);
+  box-shadow: 0 0 0 1px var(--border-strong);
   flex: none;
 }

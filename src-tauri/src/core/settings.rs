@@ -8,6 +8,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_CONCURRENCY: usize = 4;
+const DEFAULT_CONNECTIONS: usize = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -17,8 +18,17 @@ pub struct Settings {
     pub torrent_backend: String,
     /// How many downloads may run at once.
     pub max_concurrent: usize,
+    /// Max parallel connections a single HTTP download may open. 1 means one
+    /// stream; higher splits the file into ranges pulled in parallel.
+    /// Sources that don't support ranges quietly fall back to a single stream.
+    #[serde(default = "default_connections")]
+    pub connections: usize,
     /// Default destination folder; `None` means the OS Downloads folder.
     pub download_dir: Option<String>,
+}
+
+fn default_connections() -> usize {
+    DEFAULT_CONNECTIONS
 }
 
 impl Default for Settings {
@@ -27,6 +37,7 @@ impl Default for Settings {
             http_backend: "embedded".to_string(),
             torrent_backend: "embedded".to_string(),
             max_concurrent: DEFAULT_CONCURRENCY,
+            connections: DEFAULT_CONNECTIONS,
             download_dir: None,
         }
     }

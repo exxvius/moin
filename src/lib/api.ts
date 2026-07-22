@@ -10,6 +10,9 @@ export const api = {
   resumeDownload: (id: string) => invoke<void>("resume_download", { id }),
   cancelDownload: (id: string) => invoke<void>("cancel_download", { id }),
   removeDownload: (id: string) => invoke<void>("remove_download", { id }),
+  deleteDownload: (id: string) => invoke<void>("delete_download", { id }),
+  retryDownload: (id: string) => invoke<void>("retry_download", { id }),
+  forgetDownload: (id: string) => invoke<void>("forget_download", { id }),
   getSettings: () => invoke<Settings>("get_settings"),
   saveSettings: (settings: Settings) =>
     invoke<void>("set_settings", { settings }),

@@ -1,23 +1,22 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ComponentType } from "react";
 import { HomeView } from "./views/HomeView";
 import { DownloadsView } from "./views/DownloadsView";
-import { CompletedView } from "./views/CompletedView";
 import { SettingsView } from "./views/SettingsView";
 import {
   AddIcon,
-  CompletedIcon,
   DownloadsIcon,
   Logo,
-  MoonIcon,
   SettingsIcon,
-  SunIcon,
+  ThemeToggleIcon,
 } from "./components/icons";
 import { StoreProvider } from "./lib/store";
+import { initCursorFx } from "./lib/cursor";
 import { useTheme } from "./lib/theme";
 import { useAccent } from "./lib/accent";
+import { useReorderAnim } from "./lib/prefs";
 
-type View = "home" | "downloads" | "completed" | "settings";
+type View = "home" | "downloads" | "settings";
 
 const NAV: {
   id: View;
@@ -26,14 +25,23 @@ const NAV: {
 }[] = [
   { id: "home", label: "Add", icon: AddIcon },
   { id: "downloads", label: "Downloads", icon: DownloadsIcon },
-  { id: "completed", label: "Completed", icon: CompletedIcon },
-  { id: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
 function Shell() {
   const [theme, toggleTheme] = useTheme();
   const [accent, setAccent] = useAccent();
+  const [reorderAnim, setReorderAnim] = useReorderAnim();
   const [view, setView] = useState<View>("home");
+
+  // Cursor-proximity border glow on cards + download rows.
+  useEffect(() => initCursorFx(), []);
+
+  // Suppress the webview's native right-click menu; we use our own.
+  useEffect(() => {
+    const block = (e: MouseEvent) => e.preventDefault();
+    document.addEventListener("contextmenu", block);
+    return () => document.removeEventListener("contextmenu", block);
+  }, []);
 
   return (
     <div className="app">
@@ -76,7 +84,16 @@ function Shell() {
             }
             title={theme === "dark" ? "Light theme" : "Dark theme"}
           >
-            {theme === "dark" ? <MoonIcon size={19} /> : <SunIcon size={19} />}
+            <ThemeToggleIcon size={20} />
+          </button>
+          <button
+            className="rail-btn"
+            aria-current={view === "settings"}
+            aria-label="Settings"
+            title="Settings"
+            onClick={() => setView("settings")}
+          >
+            <SettingsIcon size={20} />
           </button>
         </div>
       </aside>
@@ -85,14 +102,13 @@ function Shell() {
         {view === "home" && (
           <HomeView onAdded={() => setView("downloads")} />
         )}
-        {view === "downloads" && <DownloadsView />}
-        {view === "completed" && <CompletedView />}
+        {view === "downloads" && <DownloadsView animateReorder={reorderAnim} />}
         {view === "settings" && (
           <SettingsView
-            theme={theme}
-            toggleTheme={toggleTheme}
             accent={accent}
             setAccent={setAccent}
+            reorderAnim={reorderAnim}
+            setReorderAnim={setReorderAnim}
           />
         )}
       </main>

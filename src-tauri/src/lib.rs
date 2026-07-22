@@ -54,7 +54,9 @@ pub fn run() {
             init_logging(&data_dir);
             tracing::info!("moin starting, data dir: {}", data_dir.display());
 
-            let emitter = Arc::new(AppEmitter { app: app.handle().clone() });
+            let emitter = Arc::new(AppEmitter {
+                app: app.handle().clone(),
+            });
             let engine = Engine::new(data_dir, emitter)
                 .map_err(|e| format!("failed to start the download engine: {e}"))?;
             app.manage(AppState { engine });
@@ -68,6 +70,9 @@ pub fn run() {
             commands::resume_download,
             commands::cancel_download,
             commands::remove_download,
+            commands::delete_download,
+            commands::retry_download,
+            commands::forget_download,
             commands::get_settings,
             commands::set_settings,
             commands::list_backends,

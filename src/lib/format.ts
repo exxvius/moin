@@ -37,3 +37,30 @@ export function percent(received: number, total: number | null): number | null {
   if (!total || total <= 0) return null;
   return Math.min(100, (received / total) * 100);
 }
+
+/** Compact duration from milliseconds, e.g. "2h 15m", "3m 5s", "12s". */
+export function formatDuration(ms: number): string {
+  if (!ms || ms <= 0) return "—";
+  let s = Math.round(ms / 1000);
+  const h = Math.floor(s / 3600);
+  s -= h * 3600;
+  const m = Math.floor(s / 60);
+  s -= m * 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+/** Compact local date + time, e.g. "Jul 22, 2:30 PM". */
+export function formatDate(ms: number): string {
+  const d = new Date(ms);
+  const date = d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+  const time = d.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${date}, ${time}`;
+}

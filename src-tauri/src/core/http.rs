@@ -1,6 +1,9 @@
-//! The direct-HTTP transfer used by the embedded backend. Single connection,
-//! resumable via a `Range` request against the existing `.part` file. Multi-
-//! segment parallelism can layer on top later without changing the caller.
+//! The direct-HTTP transfer used by the embedded backend. [`download`] probes the
+//! server, then either splits the file across parallel connections (see
+//! [`super::segmented`]) or streams it over one. Both paths are resumable against
+//! the existing `.part` file.
+
+use std::time::Duration;
 
 use futures_util::StreamExt;
 use reqwest::header::{CONTENT_RANGE, RANGE};
@@ -8,10 +11,130 @@ use reqwest::Client;
 use tokio::io::AsyncWriteExt;
 
 use super::backend::{Control, Outcome, ProgressFn, Signal};
+use super::segmented;
 
-/// Download `url` into `part`, then rename to `dest` on success. Resumes from
-/// whatever is already in `part`.
+/// Below this size a multi-connection download isn't worth the extra round trips,
+/// so we stream it over a single connection.
+const MIN_MULTI_SIZE: u64 = 1 << 20; // 1 MiB
+
+/// Download `url` into `part`, then rename to `dest` on success. Uses up to
+/// `connections` parallel streams when the server supports ranges and the file is
+/// large enough; otherwise a single resumable stream. `meta_path` stores the
+/// multi-connection resume plan.
+#[allow(clippy::too_many_arguments)]
 pub async fn download(
+    client: &Client,
+    url: &str,
+    part: &str,
+    dest: &str,
+    meta_path: &str,
+    connections: usize,
+    control: &Control,
+    progress: &ProgressFn,
+) -> Outcome {
+    let plan = probe(client, url).await;
+
+    // A saved multi-connection plan that still matches the server's size resumes
+    // as segmented, always: the `.part` is pre-sized for positioned writes, and a
+    // single-stream pass over it would treat the padding as real data.
+    if let (true, Some(total)) = (plan.ranges, plan.total) {
+        if segmented::plan_matches(meta_path, part, total).await {
+            return segmented::download(
+                client,
+                url,
+                part,
+                dest,
+                meta_path,
+                total,
+                connections,
+                control,
+                progress,
+            )
+            .await;
+        }
+    }
+
+    // No usable plan. Clear any stale segmented artifacts so the single-stream
+    // fallback can't mistake a pre-sized `.part` for a finished download.
+    if tokio::fs::metadata(meta_path).await.is_ok() {
+        let _ = tokio::fs::remove_file(meta_path).await;
+        let _ = tokio::fs::remove_file(part).await;
+    }
+
+    // Fresh multi-connection download when the server allows it, it's big enough,
+    // and there's no single-stream partial already on disk to preserve.
+    if connections > 1 {
+        if let (true, Some(total)) = (plan.ranges, plan.total) {
+            if total >= MIN_MULTI_SIZE && existing_len(part).await == 0 {
+                return segmented::download(
+                    client,
+                    url,
+                    part,
+                    dest,
+                    meta_path,
+                    total,
+                    connections,
+                    control,
+                    progress,
+                )
+                .await;
+            }
+        }
+    }
+
+    single_stream(client, url, part, dest, control, progress).await
+}
+
+/// What a server will let us do with a URL, learned from a tiny ranged request.
+struct Plan {
+    /// Total size in bytes, when the server reports it.
+    total: Option<u64>,
+    /// Whether the server honored a `Range` request (a `206` reply).
+    ranges: bool,
+}
+
+/// Ask for a single byte with a `Range` header. A `206` back means ranges work
+/// and the `Content-Range` carries the full size; the body is dropped unread.
+async fn probe(client: &Client, url: &str) -> Plan {
+    let resp = match client.get(url).header(RANGE, "bytes=0-0").send().await {
+        Ok(r) => r,
+        // Let the real transfer surface the error; assume single-stream for now.
+        Err(_) => {
+            return Plan {
+                total: None,
+                ranges: false,
+            }
+        }
+    };
+    if resp.status().as_u16() == 206 {
+        Plan {
+            total: content_range_total(&resp),
+            ranges: true,
+        }
+    } else if resp.status().is_success() {
+        Plan {
+            total: resp.content_length(),
+            ranges: false,
+        }
+    } else {
+        Plan {
+            total: None,
+            ranges: false,
+        }
+    }
+}
+
+/// Bytes already sitting in `part`, or 0 if it isn't there.
+async fn existing_len(part: &str) -> u64 {
+    tokio::fs::metadata(part)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0)
+}
+
+/// Stream `url` into `part` over one connection, resuming from whatever is already
+/// there, then rename to `dest`.
+async fn single_stream(
     client: &Client,
     url: &str,
     part: &str,
@@ -20,7 +143,10 @@ pub async fn download(
     progress: &ProgressFn,
 ) -> Outcome {
     // Resume offset = bytes already on disk.
-    let offset = tokio::fs::metadata(part).await.map(|m| m.len()).unwrap_or(0);
+    let offset = tokio::fs::metadata(part)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
 
     let mut req = client.get(url);
     if offset > 0 {
@@ -59,8 +185,16 @@ pub async fn download(
     let mut received = start;
     progress(received, total);
 
+    // How long to wait for a chunk before waking to re-check pause/cancel, and
+    // how many such stalls in a row mean the connection is dead.
+    const POLL: Duration = Duration::from_secs(2);
+    const STALL_LIMIT: u32 = 30; // ~60s with no data → give up
+
     let mut stream = resp.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    let mut stalls = 0u32;
+    loop {
+        // Checked every POLL even mid-stall, so a cancel/pause (e.g. from a
+        // remove) always takes effect and the file handle is released promptly.
         match control.signal() {
             Signal::Pause => {
                 let _ = file.flush().await;
@@ -72,6 +206,20 @@ pub async fn download(
             }
             Signal::Run => {}
         }
+
+        let chunk = match tokio::time::timeout(POLL, stream.next()).await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break, // stream finished
+            Err(_) => {
+                stalls += 1;
+                if stalls >= STALL_LIMIT {
+                    let _ = file.flush().await;
+                    return Outcome::Failed("connection stalled".to_string());
+                }
+                continue;
+            }
+        };
+        stalls = 0;
 
         let bytes = match chunk {
             Ok(b) => b,
@@ -94,9 +242,7 @@ pub async fn download(
 
     if let Some(t) = total {
         if received < t {
-            return Outcome::Failed(format!(
-                "connection closed early ({received} of {t} bytes)"
-            ));
+            return Outcome::Failed(format!("connection closed early ({received} of {t} bytes)"));
         }
     }
 
@@ -104,7 +250,7 @@ pub async fn download(
 }
 
 /// Move the finished `.part` file to its final name.
-async fn finalize(part: &str, dest: &str) -> Outcome {
+pub(super) async fn finalize(part: &str, dest: &str) -> Outcome {
     match tokio::fs::rename(part, dest).await {
         Ok(()) => Outcome::Completed,
         Err(e) => Outcome::Failed(format!("couldn't finalize file: {e}")),
@@ -141,7 +287,7 @@ fn parse_content_range_total(raw: &str) -> Option<u64> {
     }
 }
 
-fn friendly(e: &reqwest::Error) -> String {
+pub(super) fn friendly(e: &reqwest::Error) -> String {
     if e.is_timeout() {
         "connection timed out".to_string()
     } else if e.is_connect() {

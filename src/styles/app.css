@@ -1,5 +1,14 @@
 /* App layout + component styles. Uses the tokens in tokens.css. */
 
+/* Registered so the border-glow radius can animate (unregistered custom
+   properties can't be transitioned). Small by default = a tight glow at the
+   cursor; grows on hover to wrap the whole border. */
+@property --glow-radius {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 340px;
+}
+
 .app {
   display: grid;
   grid-template-columns: 232px 1fr;
@@ -265,7 +274,8 @@
 .card-flat.card-glow,
 .live-card,
 .ecard,
-.dropzone {
+.dropzone,
+.dl-card {
   position: relative;
   isolation: isolate;
 }
@@ -277,7 +287,8 @@
 .card-flat.card-glow::after,
 .live-card::after,
 .ecard::after,
-.dropzone::after {
+.dropzone::after,
+.dl-card::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -285,9 +296,9 @@
   border-radius: inherit;
   padding: 1px;
   background: radial-gradient(
-    360px circle at var(--mx, 50%) var(--my, 50%),
-    color-mix(in oklab, var(--accent) 75%, white),
-    color-mix(in oklab, var(--accent) 30%, transparent) 45%,
+    var(--glow-radius) circle at var(--mx, 50%) var(--my, 50%),
+    color-mix(in oklab, var(--tone, var(--accent)) 75%, white),
+    color-mix(in oklab, var(--tone, var(--accent)) 30%, transparent) 45%,
     transparent 66%
   );
   -webkit-mask:
@@ -299,8 +310,20 @@
     linear-gradient(#000 0 0);
   mask-composite: exclude;
   opacity: calc(var(--glow, 0) * 0.9);
-  transition: opacity 200ms var(--ease);
+  transition:
+    opacity 360ms var(--ease),
+    --glow-radius 360ms var(--ease);
   pointer-events: none;
+}
+/* On hover the localized glow blooms out to wrap the whole border; on leave it
+   animates back to a small circle around the cursor. */
+.card:not(.card-flat):hover::after,
+.card-flat.card-glow:hover::after,
+.live-card:hover::after,
+.ecard:hover::after,
+.dropzone:hover::after,
+.dl-card:hover::after {
+  --glow-radius: 3000px;
 }
 
 /* ---- Shiny text on hover (nav labels, card titles) ----

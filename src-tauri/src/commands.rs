@@ -78,7 +78,26 @@ pub async fn cancel_download(state: State<'_, AppState>, id: String) -> Result<(
 
 #[tauri::command]
 pub async fn remove_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.engine.remove(&id);
+    state.engine.remove(&id)
+}
+
+/// Remove from the list and delete the downloaded file from disk.
+#[tauri::command]
+pub async fn delete_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.engine.delete(&id)
+}
+
+/// Retry an archived download from scratch (re-queues it fresh).
+#[tauri::command]
+pub async fn retry_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.engine.retry(&id);
+    Ok(())
+}
+
+/// Permanently delete an archived record from the manifest.
+#[tauri::command]
+pub async fn forget_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.engine.forget(&id);
     Ok(())
 }
 

@@ -78,6 +78,8 @@ const ACTIVE: Task["status"][] = [
 ];
 
 interface StoreValue {
+  /** Everything, newest first. */
+  all: Task[];
   /** Newest first, still in flight (queued/connecting/downloading/paused). */
   active: Task[];
   /** Newest first, finished (completed/failed/canceled). */
@@ -88,6 +90,9 @@ interface StoreValue {
   resume: (id: string) => Promise<void>;
   cancel: (id: string) => Promise<void>;
   remove: (id: string) => Promise<void>;
+  delete: (id: string) => Promise<void>;
+  retry: (id: string) => Promise<void>;
+  forget: (id: string) => Promise<void>;
 }
 
 const StoreContext = createContext<StoreValue | null>(null);
@@ -122,6 +127,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       (a, b) => b.created_at - a.created_at,
     );
     return {
+      all,
       active: all.filter((t) => ACTIVE.includes(t.status)),
       finished: all.filter((t) => !ACTIVE.includes(t.status)),
       speeds: state.speeds,
@@ -132,6 +138,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       resume: (id) => api.resumeDownload(id),
       cancel: (id) => api.cancelDownload(id),
       remove: (id) => api.removeDownload(id),
+      delete: (id) => api.deleteDownload(id),
+      retry: (id) => api.retryDownload(id),
+      forget: (id) => api.forgetDownload(id),
     };
   }, [state]);
 

@@ -6,6 +6,7 @@ pub mod backend;
 pub mod embedded;
 pub mod engine;
 pub mod http;
+pub mod segmented;
 pub mod settings;
 pub mod store;
 pub mod task;

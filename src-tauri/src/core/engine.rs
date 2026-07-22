@@ -2,14 +2,16 @@
 //! selection. It's Tauri-free — it reports out through the [`Emitter`] trait,
 //! which the shell implements with `AppHandle::emit`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
-use super::backend::{BackendInfo, Control, DownloadBackend, Outcome, ProgressFn, Signal};
+use super::backend::{
+    BackendInfo, Control, DownloadBackend, Outcome, ProgressFn, Signal, TransferOpts,
+};
 use super::embedded::EmbeddedBackend;
 use super::settings::Settings;
 use super::store::Store;
@@ -27,6 +29,10 @@ struct Entry {
     task: Task,
     /// Present while the task is running; flipping it pauses/cancels the transfer.
     control: Option<Control>,
+    /// A drop requested while the task was still running. `Some(delete_file)` — the
+    /// task is cancelling; once it stops (releasing its file handle) it gets
+    /// dropped, and the completed file is deleted too when `true`.
+    pending_archive: Option<bool>,
 }
 
 struct Inner {
@@ -57,8 +63,17 @@ impl Engine {
             if task.status == TaskStatus::Connecting || task.status == TaskStatus::Downloading {
                 task.status = TaskStatus::Paused;
             }
-            tasks.insert(task.id.clone(), Entry { task, control: None });
+            tasks.insert(
+                task.id.clone(),
+                Entry {
+                    task,
+                    control: None,
+                    pending_archive: None,
+                },
+            );
         }
+
+        sweep_orphan_parts(tasks.values().map(|e| &e.task));
 
         let backends: Vec<Arc<dyn DownloadBackend>> = vec![Arc::new(EmbeddedBackend::new())];
 
@@ -89,30 +104,44 @@ impl Engine {
             return Err("no URL given".to_string());
         }
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-
-        let filename = unique_filename(&dir, &filename_from_url(&url));
-        let dest = dir.join(&filename).to_string_lossy().into_owned();
+        let base = filename_from_url(&url);
         let now = now_ms();
-        let task = Task {
-            id: Uuid::new_v4().to_string(),
-            kind: TaskKind::Http,
-            url,
-            filename,
-            dest,
-            status: TaskStatus::Queued,
-            total: None,
-            received: 0,
-            error: None,
-            created_at: now,
-            updated_at: now,
+
+        // Reserve a collision-free name while holding the registry lock, so two
+        // adds of the same URL can't race onto the same file/.part.
+        let task = {
+            let mut tasks = self.inner.tasks.lock().unwrap();
+            let taken: HashSet<String> = tasks.values().map(|e| e.task.dest.clone()).collect();
+            let filename = unique_filename(&dir, &base, &taken);
+            let dest = dir.join(&filename).to_string_lossy().into_owned();
+            let task = Task {
+                id: Uuid::new_v4().to_string(),
+                kind: TaskKind::Http,
+                url,
+                filename,
+                dest,
+                status: TaskStatus::Queued,
+                total: None,
+                received: 0,
+                error: None,
+                created_at: now,
+                updated_at: now,
+                completed_at: None,
+                archived: false,
+                active_ms: 0,
+            };
+            tasks.insert(
+                task.id.clone(),
+                Entry {
+                    task: task.clone(),
+                    control: None,
+                    pending_archive: None,
+                },
+            );
+            task
         };
 
         self.inner.store.lock().unwrap().upsert(&task)?;
-        self.inner
-            .tasks
-            .lock()
-            .unwrap()
-            .insert(task.id.clone(), Entry { task: task.clone(), control: None });
         self.inner.emitter.added(&task);
         Inner::pump(self.inner.clone());
         Ok(task)
@@ -173,27 +202,105 @@ impl Engine {
             entry.task.updated_at = now_ms();
             entry.task.clone()
         };
-        let _ = std::fs::remove_file(task.part_path());
+        cleanup_partial(&task);
         self.persist_emit(&task);
         Inner::pump(self.inner.clone());
     }
 
-    /// Drop a task entirely: stop it, forget the row, delete the partial file.
-    pub fn remove(&self, id: &str) {
+    /// Remove from the list: archive the record (kept for stats), delete the
+    /// partial file, and leave any finished file on disk.
+    pub fn remove(&self, id: &str) -> Result<(), String> {
+        self.archive(id, false)
+    }
+
+    /// Remove from the list AND delete the downloaded file from disk. Fails (and
+    /// leaves the download in the list) if the file can't be deleted.
+    pub fn delete(&self, id: &str) -> Result<(), String> {
+        self.archive(id, true)
+    }
+
+    fn archive(&self, id: &str, delete_file: bool) -> Result<(), String> {
+        // Running: defer. Deleting the `.part` now would fail on Windows (the
+        // download still holds the handle open), so wait for the task to stop and
+        // let `finish` archive it. A running task is incomplete, so there's no
+        // finished file to lock — the deferred delete can't fail this way.
+        let dest = {
+            let mut tasks = self.inner.tasks.lock().unwrap();
+            match tasks.get_mut(id) {
+                Some(entry) if entry.control.is_some() => {
+                    entry.pending_archive = Some(delete_file);
+                    if let Some(control) = &entry.control {
+                        control.set(Signal::Cancel);
+                    }
+                    return Ok(());
+                }
+                Some(entry) => entry.task.dest.clone(),
+                None => return Ok(()),
+            }
+        };
+
+        // Delete the finished file first. If that fails (e.g. it's open in another
+        // program), bail out before touching the list so the user can retry.
+        if delete_file {
+            remove_if_exists(&dest).map_err(|e| format!("Couldn't delete the file: {e}"))?;
+        }
+
         let task = {
             let mut tasks = self.inner.tasks.lock().unwrap();
-            if let Some(entry) = tasks.get(id) {
-                if let Some(control) = &entry.control {
-                    control.set(Signal::Cancel);
-                }
+            let Some(entry) = tasks.get_mut(id) else {
+                return Ok(());
+            };
+            entry.task.archived = true;
+            if entry.task.status.is_active() {
+                entry.task.status = TaskStatus::Canceled;
             }
-            tasks.remove(id).map(|e| e.task)
+            entry.task.updated_at = now_ms();
+            entry.task.clone()
         };
+        cleanup_partial(&task);
+        let _ = self.inner.store.lock().unwrap().upsert(&task);
+        self.inner.emitter.updated(&task);
+        Inner::pump(self.inner.clone());
+        Ok(())
+    }
+
+    /// Retry an archived download from scratch (not a resume) — un-archive it and
+    /// re-queue with everything reset. Fails at run time if the link is dead.
+    pub fn retry(&self, id: &str) {
+        let task = {
+            let mut tasks = self.inner.tasks.lock().unwrap();
+            let Some(entry) = tasks.get_mut(id) else {
+                return;
+            };
+            if entry.control.is_some() {
+                return;
+            }
+            entry.task.archived = false;
+            entry.task.status = TaskStatus::Queued;
+            entry.task.received = 0;
+            entry.task.total = None;
+            entry.task.error = None;
+            entry.task.active_ms = 0;
+            entry.task.completed_at = None;
+            entry.task.updated_at = now_ms();
+            entry.task.clone()
+        };
+        // Fresh start: drop any leftover partial and the old finished file.
+        cleanup_partial(&task);
+        cleanup_file(task.dest.clone());
+        let _ = self.inner.store.lock().unwrap().upsert(&task);
+        self.inner.emitter.updated(&task);
+        Inner::pump(self.inner.clone());
+    }
+
+    /// Permanently delete an archived record from the manifest (leaving any
+    /// finished file on disk).
+    pub fn forget(&self, id: &str) {
+        let task = self.inner.tasks.lock().unwrap().remove(id).map(|e| e.task);
         if let Some(task) = task {
-            let _ = std::fs::remove_file(task.part_path());
+            cleanup_partial(&task);
             let _ = self.inner.store.lock().unwrap().delete(&task.id);
             self.inner.emitter.removed(&task.id);
-            Inner::pump(self.inner.clone());
         }
     }
 
@@ -238,7 +345,11 @@ impl Inner {
         self.backends
             .iter()
             .find(|b| b.id() == want && b.supports(kind) && b.available())
-            .or_else(|| self.backends.iter().find(|b| b.supports(kind) && b.available()))
+            .or_else(|| {
+                self.backends
+                    .iter()
+                    .find(|b| b.supports(kind) && b.available())
+            })
             .cloned()
     }
 
@@ -251,10 +362,12 @@ impl Inner {
             .count()
     }
 
-    /// Start queued tasks until the concurrency limit is reached.
+    /// Start queued tasks until the concurrency limit is reached. A limit of 0
+    /// means unlimited — every queued task starts.
     fn pump(inner: Arc<Inner>) {
-        let max = inner.settings.lock().unwrap().max_concurrent.max(1);
-        while inner.running_count() < max {
+        let max = inner.settings.lock().unwrap().max_concurrent;
+        let unlimited = max == 0;
+        while unlimited || inner.running_count() < max {
             let next = {
                 let tasks = inner.tasks.lock().unwrap();
                 tasks
@@ -299,10 +412,13 @@ impl Inner {
             return;
         };
 
+        let opts = TransferOpts {
+            connections: inner.settings.lock().unwrap().connections,
+        };
         let progress = Inner::make_progress(inner.clone(), id.clone());
         let inner_done = inner.clone();
         tokio::spawn(async move {
-            let outcome = backend.run(task, control, progress).await;
+            let outcome = backend.run(task, opts, control, progress).await;
             Inner::finish(inner_done, id, outcome);
         });
     }
@@ -314,6 +430,7 @@ impl Inner {
             started: bool,
             last_emit: Instant,
             last_persist: Instant,
+            last_tick: Instant,
             last_bytes: u64,
             speed: f64,
         }
@@ -321,6 +438,7 @@ impl Inner {
             started: false,
             last_emit: Instant::now() - Duration::from_secs(1),
             last_persist: Instant::now(),
+            last_tick: Instant::now(),
             last_bytes: 0,
             speed: 0.0,
         }));
@@ -343,8 +461,13 @@ impl Inner {
                 let newly_started = !st.started;
                 if newly_started {
                     st.started = true;
+                    st.last_tick = now;
                     entry.task.status = TaskStatus::Downloading;
                     entry.task.updated_at = now_ms();
+                } else {
+                    // Accumulate active download time (for average speed).
+                    entry.task.active_ms += now.duration_since(st.last_tick).as_millis() as i64;
+                    st.last_tick = now;
                 }
 
                 let do_emit = now.duration_since(st.last_emit) >= Duration::from_millis(200);
@@ -365,7 +488,13 @@ impl Inner {
                     st.last_persist = now;
                 }
 
-                (entry.task.clone(), newly_started, do_emit, do_persist, st.speed)
+                (
+                    entry.task.clone(),
+                    newly_started,
+                    do_emit,
+                    do_persist,
+                    st.speed,
+                )
             };
 
             if newly_started {
@@ -387,33 +516,45 @@ impl Inner {
     }
 
     fn finish(inner: Arc<Inner>, id: String, outcome: Outcome) {
-        let task = {
+        // If a remove/delete was requested mid-download, archive it now — the task
+        // has stopped and released its file handle.
+        let (task, archived) = {
             let mut tasks = inner.tasks.lock().unwrap();
             let Some(entry) = tasks.get_mut(&id) else {
                 return;
             };
             entry.control = None;
-            match outcome {
-                Outcome::Completed => {
-                    entry.task.status = TaskStatus::Completed;
-                    entry.task.error = None;
-                    if let Some(total) = entry.task.total {
-                        entry.task.received = total;
+            if let Some(delete_file) = entry.pending_archive.take() {
+                entry.task.archived = true;
+                entry.task.status = TaskStatus::Canceled;
+                entry.task.updated_at = now_ms();
+                (entry.task.clone(), Some(delete_file))
+            } else {
+                match outcome {
+                    Outcome::Completed => {
+                        entry.task.status = TaskStatus::Completed;
+                        entry.task.error = None;
+                        entry.task.completed_at = Some(now_ms());
+                        if let Some(total) = entry.task.total {
+                            entry.task.received = total;
+                        }
+                    }
+                    Outcome::Paused => entry.task.status = TaskStatus::Paused,
+                    Outcome::Canceled => entry.task.status = TaskStatus::Canceled,
+                    Outcome::Failed(msg) => {
+                        entry.task.status = TaskStatus::Failed;
+                        entry.task.error = Some(msg);
                     }
                 }
-                Outcome::Paused => entry.task.status = TaskStatus::Paused,
-                Outcome::Canceled => entry.task.status = TaskStatus::Canceled,
-                Outcome::Failed(msg) => {
-                    entry.task.status = TaskStatus::Failed;
-                    entry.task.error = Some(msg);
-                }
+                entry.task.updated_at = now_ms();
+                (entry.task.clone(), None)
             }
-            entry.task.updated_at = now_ms();
-            entry.task.clone()
         };
 
-        if task.status == TaskStatus::Canceled {
-            let _ = std::fs::remove_file(task.part_path());
+        if let Some(delete_file) = archived {
+            purge_files(&task, delete_file);
+        } else if task.status == TaskStatus::Canceled {
+            cleanup_partial(&task);
         }
         let _ = inner.store.lock().unwrap().upsert(&task);
         inner.emitter.updated(&task);
@@ -421,19 +562,99 @@ impl Inner {
     }
 }
 
+/// At startup, delete `.part` files that a terminal/archived task still points
+/// to — a leftover from a cleanup that didn't finish (e.g. a crash). Only paths
+/// referenced by our own manifest are touched, so `.part` files from other apps
+/// (Firefox, etc.) in the same folder are never affected; paused/failed partials
+/// are kept so they can still be resumed.
+fn sweep_orphan_parts<'a>(tasks: impl Iterator<Item = &'a Task>) {
+    for t in tasks {
+        let should_be_gone =
+            t.archived || matches!(t.status, TaskStatus::Completed | TaskStatus::Canceled);
+        if !should_be_gone {
+            continue;
+        }
+        for leftover in [t.part_path(), t.meta_path()] {
+            if let Err(e) = std::fs::remove_file(&leftover) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("moin: couldn't sweep leftover {leftover}: {e}");
+                }
+            }
+        }
+    }
+}
+
+/// Remove a file, treating "already gone" as success but surfacing real errors
+/// (e.g. the file is locked by another process).
+fn remove_if_exists(path: &str) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
+/// Best-effort but robust background file removal. A `.part` (or a just-finished
+/// file) can briefly stay locked after a transfer stops — especially on Windows,
+/// where the OS releases the handle a moment after the writer drops it — so a
+/// single `remove_file` right after cancelling races the close and fails. This
+/// retries with backoff, treats "already gone" as success, and logs (never
+/// panics) if it truly can't, so cleanup neither blocks a caller nor fails
+/// silently. Must be called from within the tokio runtime (all callers are).
+fn cleanup_file(path: String) {
+    tokio::spawn(async move {
+        for attempt in 0u32..6 {
+            match tokio::fs::remove_file(&path).await {
+                Ok(()) => return,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+                Err(e) => {
+                    if attempt == 5 {
+                        eprintln!("moin: gave up removing {path}: {e}");
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(60 * u64::from(attempt) + 60)).await;
+                }
+            }
+        }
+    });
+}
+
+/// Delete a task's partial (`.part`) file and its `.meta` sidecar, plus the
+/// finished file when `delete_file` is set — all robustly, in the background.
+fn purge_files(task: &Task, delete_file: bool) {
+    cleanup_partial(task);
+    if delete_file {
+        cleanup_file(task.dest.clone());
+    }
+}
+
+/// Drop a task's in-progress artifacts: the `.part` file and the multi-connection
+/// `.meta` resume sidecar (absent for single-stream downloads — a no-op then).
+fn cleanup_partial(task: &Task) {
+    cleanup_file(task.part_path());
+    cleanup_file(task.meta_path());
+}
+
 /// Pick a filename that doesn't collide in `dir`, adding " (n)" before the
-/// extension if needed.
-fn unique_filename(dir: &Path, name: &str) -> String {
-    if !dir.join(name).exists() {
+/// extension if needed. Avoids: an existing file, a partial download (`.part`),
+/// and any destination already claimed by another task in `taken`.
+fn unique_filename(dir: &Path, name: &str, taken: &HashSet<String>) -> String {
+    let is_free = |candidate: &str| {
+        let path = dir.join(candidate);
+        if path.exists() || dir.join(format!("{candidate}.part")).exists() {
+            return false;
+        }
+        !taken.contains(path.to_string_lossy().as_ref())
+    };
+    if is_free(name) {
         return name.to_string();
     }
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
         _ => (name.to_string(), String::new()),
     };
-    for n in 1..10_000 {
+    for n in 1..100_000 {
         let candidate = format!("{stem} ({n}){ext}");
-        if !dir.join(&candidate).exists() {
+        if is_free(&candidate) {
             return candidate;
         }
     }

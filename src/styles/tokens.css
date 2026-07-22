@@ -24,6 +24,10 @@
   --space-6: 32px;
   --space-8: 48px;
 
+  /* Max width for page content. `none` = fill the full available width. Set a
+     value (e.g. 1280px) to cap it on very wide/ultrawide windows. */
+  --content-max: none;
+
   --radius-sm: 8px;
   --radius: 12px;
   --radius-lg: 18px;

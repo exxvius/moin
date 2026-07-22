@@ -45,6 +45,15 @@ impl Control {
     }
 }
 
+/// Per-transfer tuning the supervisor hands a backend at run time. Pulled from
+/// settings, not persisted on the task, so a change applies to the next run.
+#[derive(Debug, Clone, Copy)]
+pub struct TransferOpts {
+    /// Max parallel connections for one HTTP download. 1 = single stream.
+    /// Backends that can't split (torrent, media) ignore it.
+    pub connections: usize,
+}
+
 /// How a transfer ended. The supervisor maps this onto a [`TaskStatus`].
 #[derive(Debug)]
 pub enum Outcome {
@@ -78,8 +87,15 @@ pub trait DownloadBackend: Send + Sync {
     }
 
     /// Drive `task` to a terminal [`Outcome`], honoring `control` and reporting
-    /// progress via `progress`. `task.received` is the byte offset to resume from.
-    async fn run(&self, task: Task, control: Control, progress: ProgressFn) -> Outcome;
+    /// progress via `progress`. `task.received` is the byte offset to resume from;
+    /// `opts` carries run-time tuning like the parallel-connection count.
+    async fn run(
+        &self,
+        task: Task,
+        opts: TransferOpts,
+        control: Control,
+        progress: ProgressFn,
+    ) -> Outcome;
 }
 
 /// A backend's identity + capabilities, sent to the settings UI.

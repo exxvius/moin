@@ -66,12 +66,28 @@ pub struct Task {
     pub error: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// When the download first reached Completed (ms since epoch), if ever.
+    #[serde(default)]
+    pub completed_at: Option<i64>,
+    /// Archived tasks are hidden from the normal list (they live in the Archive
+    /// filter) but kept in the manifest so their stats still count.
+    #[serde(default)]
+    pub archived: bool,
+    /// Total time spent actively downloading, in ms — used for average speed.
+    #[serde(default)]
+    pub active_ms: i64,
 }
 
 impl Task {
     /// The partial-download file we stream into before the final rename.
     pub fn part_path(&self) -> String {
         format!("{}.part", self.dest)
+    }
+
+    /// Sidecar next to the `.part` that records per-segment progress for a
+    /// multi-connection download, so it can resume after a pause or a restart.
+    pub fn meta_path(&self) -> String {
+        format!("{}.part.meta", self.dest)
     }
 }
 
