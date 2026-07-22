@@ -54,12 +54,20 @@ export function SettingsView({
     null,
   );
   const [toolError, setToolError] = useState<string | null>(null);
+  // Local draft for the RPC port so we commit on blur, not on every keystroke.
+  const [portDraft, setPortDraft] = useState("");
+  const [tokenCopied, setTokenCopied] = useState(false);
 
   useEffect(() => {
     api.getSettings().then(setSettings).catch(() => {});
     api.listBackends().then(setBackends).catch(() => {});
     api.toolStatus().then(setTool).catch(() => {});
   }, []);
+
+  // Keep the port field in step with the loaded/committed value.
+  useEffect(() => {
+    if (settings) setPortDraft(String(settings.rpc_port));
+  }, [settings?.rpc_port]);
 
   const patch = (change: Partial<Settings>) => {
     setSettings((prev) => {
@@ -114,6 +122,38 @@ export function SettingsView({
       patch({ aria2_path: null });
     } catch (e) {
       setToolError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  // Commit the port only if it's a valid TCP port; otherwise snap back to the
+  // saved value so the field never holds something the server can't bind.
+  const commitPort = () => {
+    const n = Number(portDraft);
+    if (Number.isInteger(n) && n >= 1 && n <= 65535) {
+      if (n !== settings?.rpc_port) patch({ rpc_port: n });
+    } else {
+      setPortDraft(String(settings?.rpc_port ?? 47653));
+    }
+  };
+
+  const regenerateToken = async () => {
+    try {
+      const token = await api.regenerateRpcToken();
+      // The backend already persisted it; just mirror it locally (no re-save).
+      setSettings((prev) => (prev ? { ...prev, rpc_token: token } : prev));
+    } catch {
+      /* leave the old token in place on failure */
+    }
+  };
+
+  const copyToken = async () => {
+    if (!settings?.rpc_token) return;
+    try {
+      await navigator.clipboard.writeText(settings.rpc_token);
+      setTokenCopied(true);
+      setTimeout(() => setTokenCopied(false), 1500);
+    } catch {
+      /* clipboard may be unavailable; the field is selectable as a fallback */
     }
   };
 
@@ -357,6 +397,85 @@ export function SettingsView({
                 Clear
               </button>
             )}
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-title">Browser integration</div>
+        <p className="dim">
+          Send downloads straight from your browser to moin with the companion
+          extension. It talks to moin over a local endpoint bound to{" "}
+          <code>127.0.0.1</code> — this machine only, never the network. The
+          toggle and port take effect after you restart moin.
+        </p>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Enable browser integration</div>
+            <div className="dim">
+              Lets the extension hand downloads to moin. Applies after a restart.
+            </div>
+          </div>
+          <Switch
+            checked={settings?.rpc_enabled ?? false}
+            ariaLabel="Enable browser integration"
+            disabled={!settings}
+            onChange={(v) => patch({ rpc_enabled: v })}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Port</div>
+            <div className="dim">
+              The port the extension connects to. Change it only if another app
+              already uses it. Applies after a restart.
+            </div>
+          </div>
+          <input
+            className="add-input selectable port-input"
+            type="number"
+            min={1}
+            max={65535}
+            value={portDraft}
+            aria-label="Browser integration port"
+            disabled={!settings}
+            onChange={(e) => setPortDraft(e.target.value)}
+            onBlur={commitPort}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+            }}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Access token</div>
+            <div className="dim">
+              Paste this into the extension to pair it with moin. Regenerate it to
+              cut off a paired browser — you'll need to pair again afterwards.
+            </div>
+          </div>
+          <div className="token-actions">
+            <input
+              className="add-input selectable token-readout"
+              type="text"
+              readOnly
+              value={settings?.rpc_token ?? ""}
+              aria-label="Browser integration access token"
+              onFocus={(e) => e.currentTarget.select()}
+            />
+            <button
+              className="dl-btn"
+              onClick={copyToken}
+              disabled={!settings?.rpc_token}
+            >
+              {tokenCopied ? "Copied" : "Copy"}
+            </button>
+            <button className="dl-btn" onClick={regenerateToken} disabled={!settings}>
+              Regenerate
+            </button>
           </div>
         </div>
       </div>

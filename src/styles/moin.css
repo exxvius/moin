@@ -527,6 +527,33 @@
 .size-input {
   width: 8rem;
 }
+
+/* ---- Browser integration ----
+   The two-class selectors outrank the base `.add-input` rule (defined later in
+   this file), so width/flex win regardless of source order. Box metrics mirror
+   `.sel-trigger` so the fields line up with the Select boxes on the page. */
+.token-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.add-input.port-input,
+.add-input.token-readout {
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+}
+.add-input.port-input {
+  width: 6rem;
+}
+.add-input.token-readout {
+  width: 16rem;
+  font-family:
+    ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", monospace;
+  font-size: var(--text-sm);
+  letter-spacing: 0.02em;
+}
 .add-trigger {
   margin-top: var(--space-1);
 }

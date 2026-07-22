@@ -18,6 +18,7 @@ export const api = {
   saveSettings: (settings: Settings) =>
     invoke<void>("set_settings", { settings }),
   listBackends: () => invoke<BackendInfo[]>("list_backends"),
+  regenerateRpcToken: () => invoke<string>("regenerate_rpc_token"),
   defaultDownloadDir: () => invoke<string>("default_download_dir"),
   toolStatus: () => invoke<ToolStatus>("tool_status"),
   downloadTool: () => invoke<ToolStatus>("download_tool"),

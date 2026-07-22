@@ -21,6 +21,7 @@ export function findCategory(
 export const ADD_METHOD_LABEL: Record<AddMethodKind, string> = {
   "manual-link": "Manual link",
   "manual-torrent": "Manual torrent",
+  "browser-capture": "Browser",
   "watch-folder": "Watched folder",
   "watch-url-file": "Watched URL list",
 };

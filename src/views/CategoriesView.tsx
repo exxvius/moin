@@ -38,7 +38,7 @@ const TRIGGER_TYPES: { value: TriggerType; label: string }[] = [
 ];
 
 // Add-methods that exist today; watch methods arrive with automation.
-const LIVE_SOURCES: AddMethodKind[] = ["manual-link", "manual-torrent"];
+const LIVE_SOURCES: AddMethodKind[] = ["manual-link", "manual-torrent", "browser-capture"];
 
 function blankCategory(): Category {
   return {

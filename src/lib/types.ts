@@ -68,6 +68,14 @@ export interface Settings {
   download_dir: string | null;
   /** Explicit path to a user-supplied aria2c binary, else null. */
   aria2_path: string | null;
+  /** Whether the loopback RPC server (the browser extension's entry point) runs.
+   *  Toggling it or changing the port applies on the next app start. */
+  rpc_enabled: boolean;
+  /** Loopback port the RPC server binds. Applied at startup. */
+  rpc_port: number;
+  /** Bearer token the browser extension must present. Read live, so regenerating
+   *  it takes effect immediately. */
+  rpc_token: string;
 }
 
 export interface BackendInfo {
@@ -102,6 +110,7 @@ export interface ToolProgress {
 export type AddMethodKind =
   | "manual-link"
   | "manual-torrent"
+  | "browser-capture"
   | "watch-folder"
   | "watch-url-file";
 
