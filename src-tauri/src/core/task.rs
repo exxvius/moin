@@ -80,6 +80,9 @@ pub struct Task {
     /// `"aria2"`). `None` until the task first starts.
     #[serde(default)]
     pub backend: Option<String>,
+    /// Id of the category this download is filed under, or `None` if uncategorized.
+    #[serde(default)]
+    pub category: Option<String>,
 }
 
 impl Task {

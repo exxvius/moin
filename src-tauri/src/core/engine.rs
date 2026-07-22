@@ -13,6 +13,7 @@ use super::aria2::Aria2Backend;
 use super::backend::{
     BackendInfo, Control, DownloadBackend, Outcome, ProgressFn, Signal, TransferOpts,
 };
+use super::category::{self, Candidate, Category};
 use super::embedded::EmbeddedBackend;
 use super::settings::Settings;
 use super::store::Store;
@@ -45,6 +46,9 @@ struct Inner {
     /// download or a new bring-your-own path takes effect everywhere at once.
     tool: Arc<Aria2Tool>,
     settings: Mutex<Settings>,
+    /// User-defined categories (rules that file downloads into buckets),
+    /// persisted as `categories.json`.
+    categories: Mutex<Vec<Category>>,
     tasks: Mutex<HashMap<String, Entry>>,
     store: Mutex<Store>,
 }
@@ -60,6 +64,7 @@ impl Engine {
     pub fn new(data_dir: PathBuf, emitter: Arc<dyn Emitter>) -> Result<Self, String> {
         let store = Store::open(&data_dir)?;
         let settings = Settings::load(&data_dir);
+        let categories = category::load_or_seed(&data_dir);
 
         let mut tasks = HashMap::new();
         for mut task in store.all()? {
@@ -96,6 +101,7 @@ impl Engine {
                 backends,
                 tool,
                 settings: Mutex::new(settings),
+                categories: Mutex::new(categories),
                 tasks: Mutex::new(tasks),
                 store: Mutex::new(store),
             }),
@@ -110,12 +116,33 @@ impl Engine {
         out
     }
 
-    /// Queue a direct HTTP download into `dir`.
-    pub fn add_http(&self, url: String, dir: PathBuf) -> Result<Task, String> {
+    /// Queue a direct HTTP download. Files it under `category` when given (a valid
+    /// id), and lands it in that category's `save_dir` if it sets one — otherwise
+    /// the passed `dir`.
+    pub fn add_http(
+        &self,
+        url: String,
+        dir: PathBuf,
+        category: Option<String>,
+    ) -> Result<Task, String> {
         let url = url.trim().to_string();
         if url.is_empty() {
             return Err("no URL given".to_string());
         }
+
+        // Resolve the category: keep only an id that still exists, and honor its
+        // save-folder override for the destination.
+        let (category, dir) = {
+            let cats = self.inner.categories.lock().unwrap();
+            match category.and_then(|id| cats.iter().find(|c| c.id == id)) {
+                Some(c) => {
+                    let dir = c.save_dir.clone().map(PathBuf::from).unwrap_or(dir);
+                    (Some(c.id.clone()), dir)
+                }
+                None => (None, dir),
+            }
+        };
+
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let base = filename_from_url(&url);
         let now = now_ms();
@@ -143,6 +170,7 @@ impl Engine {
                 archived: false,
                 active_ms: 0,
                 backend: None,
+                category,
             };
             tasks.insert(
                 task.id.clone(),
@@ -374,6 +402,88 @@ impl Engine {
         let _ = self.inner.store.lock().unwrap().upsert(task);
         self.inner.emitter.updated(task);
     }
+
+    /// Every category, in priority order.
+    pub fn categories(&self) -> Vec<Category> {
+        let mut cats = self.inner.categories.lock().unwrap().clone();
+        cats.sort_by_key(|c| c.order);
+        cats
+    }
+
+    /// The category a manually-added `url` would fall into, if any — used to
+    /// pre-select the picker in the add view.
+    pub fn suggest_category(&self, url: &str) -> Option<String> {
+        use super::category::AddMethodKind;
+        let cand = Candidate::from_url(url.trim(), AddMethodKind::ManualLink);
+        category::categorize(&cand, &self.inner.categories.lock().unwrap())
+    }
+
+    /// Add a new category (server assigns its id and priority). Returns the list.
+    pub fn create_category(&self, mut cat: Category) -> Vec<Category> {
+        {
+            let mut cats = self.inner.categories.lock().unwrap();
+            cat.id = Uuid::new_v4().to_string();
+            cat.order = cats.iter().map(|c| c.order).max().unwrap_or(-1) + 1;
+            cats.push(cat);
+            category::save(&cats, &self.inner.data_dir);
+        }
+        self.categories()
+    }
+
+    /// Replace an existing category by id (no-op if it's gone). Returns the list.
+    pub fn update_category(&self, cat: Category) -> Vec<Category> {
+        {
+            let mut cats = self.inner.categories.lock().unwrap();
+            if let Some(slot) = cats.iter_mut().find(|c| c.id == cat.id) {
+                *slot = cat;
+                category::save(&cats, &self.inner.data_dir);
+            }
+        }
+        self.categories()
+    }
+
+    /// Delete a category and un-file every download that referenced it (the
+    /// downloads themselves are kept). Returns the remaining categories.
+    pub fn delete_category(&self, id: &str) -> Vec<Category> {
+        {
+            let mut cats = self.inner.categories.lock().unwrap();
+            cats.retain(|c| c.id != id);
+            category::save(&cats, &self.inner.data_dir);
+        }
+
+        // Orphan the tag on any task that pointed at this category.
+        let touched: Vec<Task> = {
+            let mut tasks = self.inner.tasks.lock().unwrap();
+            tasks
+                .values_mut()
+                .filter(|e| e.task.category.as_deref() == Some(id))
+                .map(|e| {
+                    e.task.category = None;
+                    e.task.updated_at = now_ms();
+                    e.task.clone()
+                })
+                .collect()
+        };
+        for task in &touched {
+            self.persist_emit(task);
+        }
+        self.categories()
+    }
+
+    /// Reorder categories by priority (position in `ids` = new order). Returns
+    /// the reordered list.
+    pub fn reorder_categories(&self, ids: Vec<String>) -> Vec<Category> {
+        {
+            let mut cats = self.inner.categories.lock().unwrap();
+            for (idx, id) in ids.iter().enumerate() {
+                if let Some(c) = cats.iter_mut().find(|c| &c.id == id) {
+                    c.order = idx as i32;
+                }
+            }
+            category::save(&cats, &self.inner.data_dir);
+        }
+        self.categories()
+    }
 }
 
 impl Inner {
@@ -471,8 +581,12 @@ impl Inner {
             return;
         };
 
-        let opts = TransferOpts {
-            connections: inner.settings.lock().unwrap().connections,
+        let opts = {
+            let s = inner.settings.lock().unwrap();
+            TransferOpts {
+                connections: s.connections,
+                min_split_size: s.min_split_size,
+            }
         };
         let progress = Inner::make_progress(inner.clone(), id.clone());
         let inner_done = inner.clone();

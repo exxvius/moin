@@ -6,6 +6,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::core::backend::BackendInfo;
+use crate::core::category::Category;
 use crate::core::engine::Engine;
 use crate::core::settings::Settings;
 use crate::core::task::Task;
@@ -50,9 +51,10 @@ pub async fn add_download(
     app: AppHandle,
     state: State<'_, AppState>,
     url: String,
+    category: Option<String>,
 ) -> Result<Task, String> {
     let dir = download_dir(&app, &state);
-    state.engine.add_http(url, dir)
+    state.engine.add_http(url, dir, category)
 }
 
 #[tauri::command]
@@ -154,6 +156,51 @@ pub async fn set_tool_path(
     path: Option<String>,
 ) -> Result<ToolStatus, String> {
     Ok(state.engine.set_tool_path(path).await)
+}
+
+#[tauri::command]
+pub fn list_categories(state: State<'_, AppState>) -> Vec<Category> {
+    state.engine.categories()
+}
+
+/// The category a manually-added URL would fall into, for pre-selecting the picker.
+#[tauri::command]
+pub fn suggest_category(state: State<'_, AppState>, url: String) -> Option<String> {
+    state.engine.suggest_category(&url)
+}
+
+/// Each mutator returns the full, reordered category list so the UI can replace
+/// its copy in one step.
+#[tauri::command]
+pub async fn create_category(
+    state: State<'_, AppState>,
+    category: Category,
+) -> Result<Vec<Category>, String> {
+    Ok(state.engine.create_category(category))
+}
+
+#[tauri::command]
+pub async fn update_category(
+    state: State<'_, AppState>,
+    category: Category,
+) -> Result<Vec<Category>, String> {
+    Ok(state.engine.update_category(category))
+}
+
+#[tauri::command]
+pub async fn delete_category(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Vec<Category>, String> {
+    Ok(state.engine.delete_category(&id))
+}
+
+#[tauri::command]
+pub async fn reorder_categories(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+) -> Result<Vec<Category>, String> {
+    Ok(state.engine.reorder_categories(ids))
 }
 
 /// The default download folder, for display in the UI.

@@ -4,6 +4,7 @@
 
 pub mod aria2;
 pub mod backend;
+pub mod category;
 pub mod embedded;
 pub mod engine;
 pub mod http;

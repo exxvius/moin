@@ -33,7 +33,8 @@ impl Store {
                  archived   INTEGER NOT NULL DEFAULT 0,
                  active_ms  INTEGER NOT NULL DEFAULT 0,
                  completed_at INTEGER,
-                 backend    TEXT
+                 backend    TEXT,
+                 category   TEXT
              );",
         )
         .map_err(err)?;
@@ -48,6 +49,7 @@ impl Store {
         );
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN completed_at INTEGER", []);
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN backend TEXT", []);
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN category TEXT", []);
         // Backfill a completion time for rows finished before this column existed.
         let _ = conn.execute(
             "UPDATE tasks SET completed_at = updated_at
@@ -63,7 +65,8 @@ impl Store {
             .conn
             .prepare(
                 "SELECT id, kind, url, filename, dest, status, total, received, error,
-                        created_at, updated_at, archived, active_ms, completed_at, backend
+                        created_at, updated_at, archived, active_ms, completed_at, backend,
+                        category
                  FROM tasks ORDER BY created_at DESC",
             )
             .map_err(err)?;
@@ -85,6 +88,7 @@ impl Store {
                     active_ms: r.get(12)?,
                     completed_at: r.get(13)?,
                     backend: r.get(14)?,
+                    category: r.get(15)?,
                 })
             })
             .map_err(err)?;
@@ -97,11 +101,13 @@ impl Store {
             .execute(
                 "INSERT INTO tasks
                    (id, kind, url, filename, dest, status, total, received, error,
-                    created_at, updated_at, archived, active_ms, completed_at, backend)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                    created_at, updated_at, archived, active_ms, completed_at, backend,
+                    category)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
                  ON CONFLICT(id) DO UPDATE SET
                    status=?6, total=?7, received=?8, error=?9, updated_at=?11,
-                   archived=?12, active_ms=?13, completed_at=?14, backend=?15",
+                   archived=?12, active_ms=?13, completed_at=?14, backend=?15,
+                   category=?16",
                 params![
                     t.id,
                     kind_str(t.kind),
@@ -118,6 +124,7 @@ impl Store {
                     t.active_ms,
                     t.completed_at,
                     t.backend,
+                    t.category,
                 ],
             )
             .map_err(err)?;

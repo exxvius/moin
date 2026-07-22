@@ -80,6 +80,12 @@ pub fn run() {
             commands::tool_status,
             commands::download_tool,
             commands::set_tool_path,
+            commands::list_categories,
+            commands::suggest_category,
+            commands::create_category,
+            commands::update_category,
+            commands::delete_category,
+            commands::reorder_categories,
         ])
         .run(tauri::generate_context!())
         .expect("error while running moin");
