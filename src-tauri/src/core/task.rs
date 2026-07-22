@@ -149,8 +149,7 @@ pub fn sanitize_filename(name: &str) -> Option<String> {
     let cleaned: String = base
         .chars()
         .filter(|c| {
-            !c.is_control()
-                && !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+            !c.is_control() && !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
         })
         .collect();
     let trimmed = cleaned.trim().trim_end_matches(['.', ' ']);

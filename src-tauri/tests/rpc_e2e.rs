@@ -97,13 +97,21 @@ fn start_moin() -> (Engine, String, String, PathBuf) {
     rpc::spawn(engine.clone(), download_dir.clone(), test_runtime());
     wait_for_ping(port);
 
-    (engine, format!("http://127.0.0.1:{port}"), token, download_dir)
+    (
+        engine,
+        format!("http://127.0.0.1:{port}"),
+        token,
+        download_dir,
+    )
 }
 
 /// A cheap unique-ish suffix without pulling uuid into the test.
 fn uuid_like() -> u128 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
 }
 
 /// Block until the RPC server answers `/ping`, so requests don't race the bind.
@@ -170,10 +178,16 @@ fn capture_with_cookie_downloads_the_file() {
     let done = wait_for_status(&engine, &task.id, TaskStatus::Completed);
 
     let bytes = std::fs::read(&done.dest).unwrap();
-    assert_eq!(bytes, PAYLOAD, "downloaded bytes should match what the origin served");
+    assert_eq!(
+        bytes, PAYLOAD,
+        "downloaded bytes should match what the origin served"
+    );
     assert!(done.dest.starts_with(download_dir.to_str().unwrap()));
     // The captured filename overrides the URL-derived one.
-    assert_eq!(done.filename, "renamed.bin", "should use the passed filename");
+    assert_eq!(
+        done.filename, "renamed.bin",
+        "should use the passed filename"
+    );
 }
 
 #[test]
@@ -212,5 +226,8 @@ fn ping_is_unauthenticated() {
     let resp = reqwest::blocking::get(format!("{base}/ping")).unwrap();
     assert_eq!(resp.status().as_u16(), 200);
     let body = resp.text().unwrap();
-    assert!(body.contains("\"app\":\"moin\""), "ping should identify moin: {body}");
+    assert!(
+        body.contains("\"app\":\"moin\""),
+        "ping should identify moin: {body}"
+    );
 }

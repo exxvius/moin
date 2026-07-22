@@ -101,7 +101,9 @@ pub fn run() {
             if let Ok(rt) = rx.recv() {
                 rpc::spawn(engine.clone(), fallback_dir, rt);
             } else {
-                tracing::warn!("couldn't capture the tokio runtime handle; browser integration off");
+                tracing::warn!(
+                    "couldn't capture the tokio runtime handle; browser integration off"
+                );
             }
 
             app.manage(AppState { engine });
