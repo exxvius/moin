@@ -76,6 +76,10 @@ pub struct Task {
     /// Total time spent actively downloading, in ms — used for average speed.
     #[serde(default)]
     pub active_ms: i64,
+    /// Id of the backend that actually ran this download (e.g. `"embedded"` or
+    /// `"aria2"`). `None` until the task first starts.
+    #[serde(default)]
+    pub backend: Option<String>,
 }
 
 impl Task {

@@ -32,7 +32,8 @@ impl Store {
                  updated_at INTEGER NOT NULL,
                  archived   INTEGER NOT NULL DEFAULT 0,
                  active_ms  INTEGER NOT NULL DEFAULT 0,
-                 completed_at INTEGER
+                 completed_at INTEGER,
+                 backend    TEXT
              );",
         )
         .map_err(err)?;
@@ -46,6 +47,7 @@ impl Store {
             [],
         );
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN completed_at INTEGER", []);
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN backend TEXT", []);
         // Backfill a completion time for rows finished before this column existed.
         let _ = conn.execute(
             "UPDATE tasks SET completed_at = updated_at
@@ -61,7 +63,7 @@ impl Store {
             .conn
             .prepare(
                 "SELECT id, kind, url, filename, dest, status, total, received, error,
-                        created_at, updated_at, archived, active_ms, completed_at
+                        created_at, updated_at, archived, active_ms, completed_at, backend
                  FROM tasks ORDER BY created_at DESC",
             )
             .map_err(err)?;
@@ -82,6 +84,7 @@ impl Store {
                     archived: r.get::<_, i64>(11)? != 0,
                     active_ms: r.get(12)?,
                     completed_at: r.get(13)?,
+                    backend: r.get(14)?,
                 })
             })
             .map_err(err)?;
@@ -94,11 +97,11 @@ impl Store {
             .execute(
                 "INSERT INTO tasks
                    (id, kind, url, filename, dest, status, total, received, error,
-                    created_at, updated_at, archived, active_ms, completed_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+                    created_at, updated_at, archived, active_ms, completed_at, backend)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
                  ON CONFLICT(id) DO UPDATE SET
                    status=?6, total=?7, received=?8, error=?9, updated_at=?11,
-                   archived=?12, active_ms=?13, completed_at=?14",
+                   archived=?12, active_ms=?13, completed_at=?14, backend=?15",
                 params![
                     t.id,
                     kind_str(t.kind),
@@ -114,6 +117,7 @@ impl Store {
                     t.archived as i64,
                     t.active_ms,
                     t.completed_at,
+                    t.backend,
                 ],
             )
             .map_err(err)?;

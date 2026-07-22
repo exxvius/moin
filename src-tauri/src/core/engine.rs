@@ -142,6 +142,7 @@ impl Engine {
                 completed_at: None,
                 archived: false,
                 active_ms: 0,
+                backend: None,
             };
             tasks.insert(
                 task.id.clone(),
@@ -427,6 +428,18 @@ impl Inner {
     }
 
     fn start(inner: Arc<Inner>, id: String) {
+        // Resolve the backend before flipping the task to Connecting, so the record
+        // of which backend ran (persisted below) reflects the one that actually
+        // handles the transfer — including any fallback from the user's pick.
+        let kind = {
+            let tasks = inner.tasks.lock().unwrap();
+            match tasks.get(&id) {
+                Some(entry) if entry.control.is_none() => entry.task.kind,
+                _ => return,
+            }
+        };
+        let backend = inner.backend_for(kind);
+
         let (task, control) = {
             let mut tasks = inner.tasks.lock().unwrap();
             let Some(entry) = tasks.get_mut(&id) else {
@@ -439,6 +452,9 @@ impl Inner {
             entry.control = Some(control.clone());
             entry.task.status = TaskStatus::Connecting;
             entry.task.error = None;
+            if let Some(b) = &backend {
+                entry.task.backend = Some(b.id().to_string());
+            }
             entry.task.updated_at = now_ms();
             (entry.task.clone(), control)
         };
@@ -446,7 +462,7 @@ impl Inner {
         let _ = inner.store.lock().unwrap().upsert(&task);
         inner.emitter.updated(&task);
 
-        let Some(backend) = inner.backend_for(task.kind) else {
+        let Some(backend) = backend else {
             Inner::finish(
                 inner,
                 id,

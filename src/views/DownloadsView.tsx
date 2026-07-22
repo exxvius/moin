@@ -86,6 +86,15 @@ const FILTERS: { id: FilterId; label: string; match: (t: Task) => boolean }[] = 
   { id: "archived", label: "Archived", match: (t) => t.archived },
 ];
 
+// Friendly names for the backend ids the engine stamps on each task.
+const BACKEND_LABELS: Record<string, string> = {
+  embedded: "Built-in",
+  aria2: "aria2c",
+};
+function backendLabel(id: string): string {
+  return BACKEND_LABELS[id] ?? id;
+}
+
 // Only the columns worth sorting by stay on display; the rest live in the
 // expanded card. The layout is a fixed, responsive grid — it scales to fit any
 // window width, no horizontal scroll or resizing.
@@ -1020,6 +1029,12 @@ function Card({
               <span className="dk">Time spent</span>
               <span className="dv">{formatDuration(task.active_ms)}</span>
             </div>
+            {task.backend && (
+              <div className="detail-item">
+                <span className="dk">Engine</span>
+                <span className="dv">{backendLabel(task.backend)}</span>
+              </div>
+            )}
             <div className="detail-item wide">
               <span className="dk">Saved to</span>
               <span className="dv path selectable">{task.dest}</span>

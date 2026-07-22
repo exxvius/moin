@@ -30,6 +30,8 @@ export interface Task {
   archived: boolean;
   /** Total ms spent actively downloading (for average speed). */
   active_ms: number;
+  /** Id of the backend that ran this download ("embedded"/"aria2"), else null. */
+  backend: string | null;
 }
 
 export interface TaskProgress {
