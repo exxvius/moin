@@ -78,6 +78,78 @@ Matches the moin repository's license (Cargo.toml `license = "MIT"`).
 
 ---
 
+## Chrome Web Store — Privacy practices tab
+
+### Single purpose
+
+```
+moin — download capture has one purpose: to hand the browser's downloads to the moin desktop app running on the same computer, so downloads are managed by moin instead of the browser.
+```
+
+### Permission justifications
+
+**contextMenus**
+
+```
+Adds a single "Download with moin" item to the right-click menu for links, images, audio, and video, so the user can explicitly send a link to moin.
+```
+
+**downloads**
+
+```
+Used to catch a download the browser starts and hand it to moin instead: the extension pauses the browser's download, sends the URL to moin, then cancels the browser copy (or resumes it if moin declines). Nothing beyond the item being captured is read.
+```
+
+**cookies**
+
+```
+When a download is sent to moin, the extension reads the cookies for that download's URL and forwards them to the local moin app, so downloads from sites the user is signed in to succeed. Cookies are read only for the URL being downloaded and are sent only to moin on 127.0.0.1.
+```
+
+**storage**
+
+```
+Stores the extension's own settings locally: the port and access token used to reach the local moin app, and the on/off toggles for capturing. No browsing data is stored.
+```
+
+**notifications**
+
+```
+Shows a short confirmation when a download has been sent to moin, or an error if it couldn't be (for example, moin isn't running or the access token is wrong).
+```
+
+**tabs**
+
+```
+Used to show the "launch moin?" prompt on the current tab, and to read the active tab's page URL as the referer for a captured download. No tab browsing history is collected.
+```
+
+**Host permission use** (127.0.0.1 and broad site access)
+
+```
+Access to 127.0.0.1 is required to talk to the moin desktop app's local endpoint. Broad site access is required because a download can come from any website: the extension reads that site's cookies and the page URL only for the specific download being sent to moin. No page content is collected, and nothing is sent to any remote server.
+```
+
+### Remote code
+
+Select **"No, I am not using remote code."** All of the extension's code is bundled
+in the package; it only exchanges JSON with the local moin app and never fetches or
+executes remotely-hosted code.
+
+### Data usage
+
+The extension does **not** collect user data for the developer or any third party.
+Cookies and page URLs are read only to forward a download to the moin app on the
+user's own machine (127.0.0.1) — nothing leaves the device. In the data-collection
+questions, indicate that no data is sold or transferred for purposes unrelated to
+the item's core function, then **tick the certification** that data usage complies
+with the Developer Program Policies.
+
+### Contact email
+
+You must add and **verify** a contact email on the **Settings** page before you can
+publish — that's your own action; pick an address you're willing to publish.
+
 ## Notes for the reviewer (if there's a "Notes to reviewer" box)
 
 ```
