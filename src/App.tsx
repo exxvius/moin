@@ -4,31 +4,41 @@ import { HomeView } from "./views/HomeView";
 import { DownloadsView } from "./views/DownloadsView";
 import { CompletedView } from "./views/CompletedView";
 import { SettingsView } from "./views/SettingsView";
+import {
+  AddIcon,
+  CompletedIcon,
+  DownloadsIcon,
+  Logo,
+  MoonIcon,
+  SettingsIcon,
+  SunIcon,
+} from "./components/icons";
 import { useTheme } from "./lib/theme";
 import { useAccent } from "./lib/accent";
 
 type View = "home" | "downloads" | "completed" | "settings";
 
-const NAV: { id: View; label: string }[] = [
-  { id: "home", label: "Add" },
-  { id: "downloads", label: "Downloads" },
-  { id: "completed", label: "Completed" },
-  { id: "settings", label: "Settings" },
+const NAV: {
+  id: View;
+  label: string;
+  icon: ComponentType<{ size?: number }>;
+}[] = [
+  { id: "home", label: "Add", icon: AddIcon },
+  { id: "downloads", label: "Downloads", icon: DownloadsIcon },
+  { id: "completed", label: "Completed", icon: CompletedIcon },
+  { id: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
-const VIEWS: Record<View, ComponentType> = {
+const VIEWS: Record<Exclude<View, "settings">, ComponentType> = {
   home: HomeView,
   downloads: DownloadsView,
   completed: CompletedView,
-  settings: () => null, // rendered explicitly below (needs theme/accent props)
 };
 
 export default function App() {
   const [theme, toggleTheme] = useTheme();
   const [accent, setAccent] = useAccent();
   const [view, setView] = useState<View>("home");
-
-  const Body = VIEWS[view];
 
   return (
     <div className="app">
@@ -39,30 +49,39 @@ export default function App() {
         <i />
       </div>
 
-      <aside className="sidebar">
-        <div className="brand">
-          {/* TODO(icons): brand logo mark — awaiting SVG from user */}
-          <span className="wordmark">moin</span>
+      <aside className="rail">
+        <div className="rail-brand" title="moin">
+          <Logo size={40} />
         </div>
 
-        <nav aria-label="Main">
-          {NAV.map((n) => (
-            <button
-              key={n.id}
-              className="nav-item"
-              aria-current={view === n.id}
-              onClick={() => setView(n.id)}
-            >
-              {/* TODO(icons): nav glyph — awaiting SVG from user */}
-              <span className="grow">{n.label}</span>
-            </button>
-          ))}
+        <nav className="rail-nav" aria-label="Main">
+          {NAV.map((n) => {
+            const Icon = n.icon;
+            return (
+              <button
+                key={n.id}
+                className="rail-btn"
+                aria-current={view === n.id}
+                aria-label={n.label}
+                title={n.label}
+                onClick={() => setView(n.id)}
+              >
+                <Icon size={20} />
+              </button>
+            );
+          })}
         </nav>
 
-        <div className="sidebar-foot">
-          <button className="foot-btn" onClick={toggleTheme}>
-            {/* TODO(icons): moon/sun glyph — awaiting SVG from user */}
-            <span>{theme === "dark" ? "Dark" : "Light"}</span>
+        <div className="rail-foot">
+          <button
+            className="rail-btn"
+            onClick={toggleTheme}
+            aria-label={
+              theme === "dark" ? "Switch to light theme" : "Switch to dark theme"
+            }
+            title={theme === "dark" ? "Light theme" : "Dark theme"}
+          >
+            {theme === "dark" ? <MoonIcon size={19} /> : <SunIcon size={19} />}
           </button>
         </div>
       </aside>
@@ -76,7 +95,10 @@ export default function App() {
             setAccent={setAccent}
           />
         ) : (
-          <Body />
+          (() => {
+            const Body = VIEWS[view];
+            return <Body />;
+          })()
         )}
       </main>
     </div>

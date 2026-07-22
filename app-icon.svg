@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 24 24">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="24" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#161c2b"/>
+      <stop offset="1" stop-color="#0c1017"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="24" height="24" rx="5.4" fill="url(#tile)"/>
+
+  <!-- M frame as a filled outline: sharp miter corners, and the two legs cut off
+       at the arrow slope (outer corner low), matching the middle chevron. -->
+  <path fill="#6f8bff" d="M6.25 17L6.25 5.438L12 10.04L17.75 5.438L17.75 17L16.25 15.8L16.25 8.56L12 11.963L7.75 8.56L7.75 15.8Z"/>
+
+  <!-- Middle download chevron: filled, flat vertical ends, one arrow-width below
+       the valley so the gap reads as a matching chevron of whitespace. -->
+  <path fill="#6f8bff" d="M9 11.48L12 13.88L15 11.48L15 13.4L12 15.8L9 13.4Z"/>
+</svg>
