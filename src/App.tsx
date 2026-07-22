@@ -1,11 +1,9 @@
 import { useEffect, useState } from "react";
 import type { ComponentType } from "react";
-import { HomeView } from "./views/HomeView";
 import { DownloadsView } from "./views/DownloadsView";
 import { CategoriesView } from "./views/CategoriesView";
 import { SettingsView } from "./views/SettingsView";
 import {
-  AddIcon,
   CategoriesIcon,
   DownloadsIcon,
   Logo,
@@ -18,14 +16,13 @@ import { useTheme } from "./lib/theme";
 import { useAccent } from "./lib/accent";
 import { useReorderAnim } from "./lib/prefs";
 
-type View = "home" | "downloads" | "categories" | "settings";
+type View = "downloads" | "categories" | "settings";
 
 const NAV: {
   id: View;
   label: string;
   icon: ComponentType<{ size?: number }>;
 }[] = [
-  { id: "home", label: "Add", icon: AddIcon },
   { id: "downloads", label: "Downloads", icon: DownloadsIcon },
   { id: "categories", label: "Categories", icon: CategoriesIcon },
 ];
@@ -34,7 +31,7 @@ function Shell() {
   const [theme, toggleTheme] = useTheme();
   const [accent, setAccent] = useAccent();
   const [reorderAnim, setReorderAnim] = useReorderAnim();
-  const [view, setView] = useState<View>("home");
+  const [view, setView] = useState<View>("downloads");
 
   // Cursor-proximity border glow on cards + download rows.
   useEffect(() => initCursorFx(), []);
@@ -102,9 +99,6 @@ function Shell() {
       </aside>
 
       <main className="main">
-        {view === "home" && (
-          <HomeView onAdded={() => setView("downloads")} />
-        )}
         {view === "downloads" && <DownloadsView animateReorder={reorderAnim} />}
         {view === "categories" && <CategoriesView />}
         {view === "settings" && (

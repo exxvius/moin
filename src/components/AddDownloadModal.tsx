@@ -1,16 +1,21 @@
-import { useEffect, useState } from "react";
-import { ConfirmModal } from "../components/ConfirmModal";
-import { Select } from "../components/Select";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { ConfirmModal } from "./ConfirmModal";
+import { Select } from "./Select";
+import { CategoryIcon } from "./CategoryIcon";
 import { useStore } from "../lib/store";
 import { api } from "../lib/api";
-import { CategoryIcon } from "../components/CategoryIcon";
 
 interface Props {
-  onAdded: () => void;
+  onClose: () => void;
 }
 
-export function HomeView({ onAdded }: Props) {
+/** The add-a-download form as a modal, opened from the Downloads header. Pastes a
+ *  direct link, optionally files it under a category (auto-suggested from the
+ *  URL), and closes once the download is queued. */
+export function AddDownloadModal({ onClose }: Props) {
   const store = useStore();
+  const inputRef = useRef<HTMLInputElement>(null);
   const [url, setUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -19,6 +24,19 @@ export function HomeView({ onAdded }: Props) {
   // "" = uncategorized. Auto-filled from the URL until the user picks manually.
   const [category, setCategory] = useState("");
   const [touched, setTouched] = useState(false);
+
+  // Land the cursor in the URL box on open.
+  useEffect(() => inputRef.current?.focus(), []);
+
+  // Esc closes the form (unless the duplicate confirm is up — it owns Esc then).
+  useEffect(() => {
+    if (dupUrl) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [dupUrl, onClose]);
 
   // Suggest a category from the URL (debounced). A manual pick (touched) sticks;
   // clearing the box re-enables auto-suggest.
@@ -46,13 +64,9 @@ export function HomeView({ onAdded }: Props) {
     setError(null);
     try {
       await store.add(value, category || null);
-      setUrl("");
-      setCategory("");
-      setTouched(false);
-      onAdded();
+      onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-    } finally {
       setBusy(false);
     }
   };
@@ -69,27 +83,36 @@ export function HomeView({ onAdded }: Props) {
     await doAdd(value);
   };
 
-  return (
-    <div className="view">
-      <div className="view-head">
-        <h2>Add a download</h2>
-        <p>Paste a direct link. Torrents and media sites are coming next.</p>
-      </div>
+  return createPortal(
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal add-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Add a download"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-title">Add a download</div>
 
-      <div className="card">
-        <div className="add-row">
-          <input
-            className="add-input selectable"
-            type="url"
-            inputMode="url"
-            placeholder="https://example.com/file.zip"
-            value={url}
-            spellCheck={false}
-            onChange={(e) => setUrl(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submit();
-            }}
-          />
+        <input
+          ref={inputRef}
+          className="add-input selectable"
+          type="url"
+          inputMode="url"
+          placeholder="https://example.com/file.zip"
+          value={url}
+          spellCheck={false}
+          onChange={(e) => setUrl(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submit();
+          }}
+        />
+        <p className="dim add-modal-hint">
+          Paste a direct link. Torrents and media sites are coming next.
+        </p>
+        {error && <p className="dl-error">{error}</p>}
+
+        <div className="add-modal-foot">
           {store.categories.length > 0 && (
             <Select
               value={category}
@@ -113,15 +136,19 @@ export function HomeView({ onAdded }: Props) {
               ]}
             />
           )}
-          <button
-            className="btn-primary"
-            onClick={submit}
-            disabled={busy || url.trim().length === 0}
-          >
-            {busy ? "Adding…" : "Download"}
-          </button>
+          <div className="add-modal-actions">
+            <button className="dl-btn" onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              className="btn-primary"
+              onClick={submit}
+              disabled={busy || url.trim().length === 0}
+            >
+              {busy ? "Adding…" : "Download"}
+            </button>
+          </div>
         </div>
-        {error && <p className="dl-error">{error}</p>}
       </div>
 
       {dupUrl && (
@@ -130,8 +157,7 @@ export function HomeView({ onAdded }: Props) {
           message={
             <>
               This download is already in your list. Add it again anyway? A
-              numbered copy will be saved so it won't overwrite the existing
-              file.
+              numbered copy will be saved so it won't overwrite the existing file.
             </>
           }
           confirmLabel="Add anyway"
@@ -144,6 +170,7 @@ export function HomeView({ onAdded }: Props) {
           }}
         />
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }

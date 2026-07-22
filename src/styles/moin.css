@@ -677,6 +677,54 @@
   margin-top: var(--space-5);
 }
 
+/* ---- Toolbar add button ---- */
+.toolbar-add {
+  flex: none;
+  align-self: stretch;
+  width: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--accent-grad);
+  color: var(--accent-ink);
+  box-shadow: var(--accent-glow);
+  cursor: pointer;
+  transition:
+    filter var(--duration-fast) var(--ease),
+    transform var(--duration-fast) var(--ease);
+}
+.toolbar-add:hover {
+  filter: brightness(1.08);
+}
+.toolbar-add:active {
+  transform: translateY(1px);
+}
+
+/* ---- Add modal ---- */
+.add-modal {
+  width: min(520px, 100%);
+}
+.add-modal .add-input {
+  width: 100%;
+}
+.add-modal-hint {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+}
+.add-modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+.add-modal-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
 /* ---- Add form ---- */
 .add-row {
   display: flex;

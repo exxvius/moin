@@ -6,7 +6,8 @@ import type {
 } from "react";
 import { createPortal } from "react-dom";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { SortArrowIcon } from "../components/icons";
+import { AddIcon, SortArrowIcon } from "../components/icons";
+import { AddDownloadModal } from "../components/AddDownloadModal";
 import { Select } from "../components/Select";
 import { SmoothScroll } from "../components/SmoothScroll";
 import { ContextMenu, type MenuEntry } from "../components/ContextMenu";
@@ -327,6 +328,8 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   const [moveOpen, setMoveOpen] = useState(false);
   // Error message to surface in a popup (e.g. a file delete that failed).
   const [error, setError] = useState<string | null>(null);
+  // The add-a-download modal, opened from the "+" in the header.
+  const [showAdd, setShowAdd] = useState(false);
   // Live width of the list, so columns can drop out when the window is narrow.
   const [listWidth, setListWidth] = useState(0);
 
@@ -779,6 +782,8 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
         <p>Everything moin is working on.</p>
       </div>
 
+      {showAdd && <AddDownloadModal onClose={() => setShowAdd(false)} />}
+
       <div className="card stat-card">
         <div className="stat-hero">
           <span className="stat-hero-num">
@@ -865,6 +870,14 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
             spellCheck={false}
             onChange={(e) => setQuery(e.target.value)}
           />
+          <button
+            className="toolbar-add"
+            onClick={() => setShowAdd(true)}
+            aria-label="Add a download"
+            title="Add a download"
+          >
+            <AddIcon size={18} />
+          </button>
         </div>
 
         {rows.length === 0 ? (
