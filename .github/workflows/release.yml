@@ -1,0 +1,95 @@
+name: release
+
+# Build self-contained moin packages for Windows, macOS, and Linux, and attach
+# them — plus the portable Windows binary and the browser-extension zips — to a
+# GitHub Release.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+          - os: macos-latest
+            triple: aarch64-apple-darwin
+          - os: ubuntu-22.04
+            triple: x86_64-unknown-linux-gnu
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libssl-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --target ${{ matrix.triple }}
+          tagName: ${{ github.ref_name }}
+          releaseName: "${{ github.ref_name }}"
+          releaseBody: "Tiny, self-contained moin installers. External tools (aria2c, and later yt-dlp/ffmpeg) are fetched on demand, or bring your own. The browser-extension zips are attached below."
+          releaseDraft: true
+          prerelease: false
+
+      # tauri-action attaches only the bundle installers (NSIS/MSI/…), not the raw
+      # binary. Attach the standalone portable .exe too — it's self-contained and
+      # runs without installation on Windows 10/11.
+      - name: Attach portable Windows binary
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          out="moin_${ver}_x64_portable.exe"
+          cp "src-tauri/target/${{ matrix.triple }}/release/moin.exe" "$out"
+          gh release upload "$GITHUB_REF_NAME" "$out" --clobber
+
+      # The browser extension lives in this repo, so ship it with the release:
+      # one zip per browser, built from a single source tree.
+      - name: Package and attach the browser extension
+        if: matrix.os == 'ubuntu-22.04'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          node extension/build.mjs
+          ( cd extension/dist/chrome && zip -qr "$GITHUB_WORKSPACE/moin-extension-chrome-${ver}.zip" . )
+          ( cd extension/dist/firefox && zip -qr "$GITHUB_WORKSPACE/moin-extension-firefox-${ver}.zip" . )
+          gh release upload "$GITHUB_REF_NAME" \
+            "moin-extension-chrome-${ver}.zip" \
+            "moin-extension-firefox-${ver}.zip" --clobber

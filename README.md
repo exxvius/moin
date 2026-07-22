@@ -1,44 +1,60 @@
 # moin
 
-A single download manager for direct links, torrents, and media sites. They all
-share one queue and one interface. Built with Rust and Tauri, with a React
-frontend.
+A download manager for the desktop, built with Rust and Tauri. One queue, one
+clean interface, and a companion browser extension that sends your downloads
+straight to it.
 
-## Supported sources
+moin is in active development. Direct HTTP/HTTPS downloading is complete and
+solid; BitTorrent and media sites are on the roadmap below.
 
-- **Direct HTTP/HTTPS.** Downloads in parallel chunks and resumes after a
-  dropped connection.
-- **BitTorrent.** Magnet links and `.torrent` files, handled by an embedded
-  client ([librqbit](https://github.com/ikatson/rqbit)). No extra software is
-  required; DHT, seeding, and resume are all included.
-- **Media sites.** YouTube and similar, through `yt-dlp`.
+## Features
 
-## No bundled binaries
+- **Fast HTTP/HTTPS downloads.** Files are split across parallel connections and
+  reassembled, with per-segment resume that survives a pause, a dropped
+  connection, or an app restart.
+- **One managed queue.** A concurrency limit you control, live progress and
+  speed, and all-time stats. Downloads persist across restarts.
+- **Categories.** File downloads into named buckets by rules — file extension,
+  size, or URL/name patterns — each with an optional destination folder, colour,
+  and icon. New downloads are sorted automatically.
+- **Two download engines.** A built-in engine that needs no setup, or
+  [aria2c](https://aria2.github.io/) as a drop-in alternative, selectable per
+  source. aria2c is fetched from within the app or you can point moin at your own
+  binary.
+- **Browser extension.** Capture downloads from Chrome, Edge, Brave, and Firefox
+  and hand them to moin — cookies and all, so downloads from sites you're signed
+  in to work. See [`extension/`](extension/).
+- **A considered interface.** A dark-first design with a selectable accent colour
+  that recolours the whole app, and a light theme that's equally deliberate.
 
-moin doesn't ship `yt-dlp` or `ffmpeg` inside it, which keeps the app small.
-Download the current version from within moin when you need it, or point it at a
-binary you already have. If the binary you provide is out of date or missing a
-capability moin requires, moin flags it and offers to fetch a current build.
+## Browser extension
 
-Direct downloads and torrents have no external dependencies. Only media-site
-downloads rely on `yt-dlp`, plus `ffmpeg` when audio and video need to be merged.
+The companion extension in [`extension/`](extension/) intercepts downloads in the
+browser and sends them to moin over a local-only connection. It captures a link
+as you click it (before the browser's save dialog), through a right-click
+**"Download with moin"**, and — on Firefox — from server-driven downloads too. If
+moin isn't running, it offers to launch it.
 
-## Interface
+Enable it under **Settings → Browser integration** in moin, then load the
+extension and pair it with the shown token. Setup and per-browser instructions are
+in the [extension README](extension/README.md).
 
-A dark-first design with a single accent color that recolors the entire app. The
-accent is selectable in settings and works in both light and dark themes. It
-defaults to blue.
+## Nothing is bundled
 
-## Roadmap
+moin ships small. External tools are never packaged inside it — aria2c today, and
+`yt-dlp` and `ffmpeg` when the media engine lands. Fetch the current build from
+within the app, or point moin at a binary you already have. If a supplied binary
+is too old or missing a capability moin needs, moin flags it and offers to fetch a
+current one.
 
-Development is happening in stages:
+Direct HTTP downloads have no external dependencies at all.
 
-1. Scaffold and theming (current)
-2. Direct HTTP downloads: task model, queue, persistence, and live progress
-3. BitTorrent: librqbit session, magnet support, and seeding
-4. Media sites: yt-dlp and ffmpeg, with in-app tool management and capability
-   checks
-5. Remaining work: bandwidth limits, system tray, and first-run setup
+## Install
+
+Grab an installer or the portable Windows build from the
+[latest release](https://github.com/exxvius/moin/releases/latest). Installers are
+available for Windows, macOS, and Linux, and each browser-extension zip is
+attached to the same release.
 
 ## Development
 
@@ -47,6 +63,23 @@ npm install
 npm run tauri dev
 ```
 
+Build a production bundle with `npm run tauri build`. The Rust engine lives in
+`src-tauri/src/core` and is deliberately free of any Tauri types, so it can be
+tested on its own:
+
+```sh
+cd src-tauri && cargo test
+```
+
+## Roadmap
+
+- **BitTorrent** — magnet links and `.torrent` files via an embedded
+  [librqbit](https://github.com/ikatson/rqbit) client (DHT, seeding, resume), with
+  aria2c as an alternative engine.
+- **Media sites** — YouTube and similar through `yt-dlp` and `ffmpeg`, with in-app
+  tool management and capability checks.
+- **Polish** — bandwidth limits, UPnP/NAT-PMP, a system tray, and first-run setup.
+
 ## License
 
-MIT
+[MIT](LICENSE).
