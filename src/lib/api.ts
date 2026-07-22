@@ -1,10 +1,11 @@
 // Thin typed wrappers over Tauri `invoke`.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { BackendInfo, Settings, Task, ToolStatus } from "./types";
+import type { BackendInfo, Category, Settings, Task, ToolStatus } from "./types";
 
 export const api = {
-  addDownload: (url: string) => invoke<Task>("add_download", { url }),
+  addDownload: (url: string, category?: string | null) =>
+    invoke<Task>("add_download", { url, category: category ?? null }),
   listDownloads: () => invoke<Task[]>("list_downloads"),
   pauseDownload: (id: string) => invoke<void>("pause_download", { id }),
   resumeDownload: (id: string) => invoke<void>("resume_download", { id }),
@@ -22,4 +23,14 @@ export const api = {
   downloadTool: () => invoke<ToolStatus>("download_tool"),
   setToolPath: (path: string | null) =>
     invoke<ToolStatus>("set_tool_path", { path }),
+  listCategories: () => invoke<Category[]>("list_categories"),
+  suggestCategory: (url: string) =>
+    invoke<string | null>("suggest_category", { url }),
+  createCategory: (category: Category) =>
+    invoke<Category[]>("create_category", { category }),
+  updateCategory: (category: Category) =>
+    invoke<Category[]>("update_category", { category }),
+  deleteCategory: (id: string) => invoke<Category[]>("delete_category", { id }),
+  reorderCategories: (ids: string[]) =>
+    invoke<Category[]>("reorder_categories", { ids }),
 };

@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import type { ComponentType } from "react";
 import { HomeView } from "./views/HomeView";
 import { DownloadsView } from "./views/DownloadsView";
+import { CategoriesView } from "./views/CategoriesView";
 import { SettingsView } from "./views/SettingsView";
 import {
   AddIcon,
+  CategoriesIcon,
   DownloadsIcon,
   Logo,
   SettingsIcon,
@@ -16,7 +18,7 @@ import { useTheme } from "./lib/theme";
 import { useAccent } from "./lib/accent";
 import { useReorderAnim } from "./lib/prefs";
 
-type View = "home" | "downloads" | "settings";
+type View = "home" | "downloads" | "categories" | "settings";
 
 const NAV: {
   id: View;
@@ -25,6 +27,7 @@ const NAV: {
 }[] = [
   { id: "home", label: "Add", icon: AddIcon },
   { id: "downloads", label: "Downloads", icon: DownloadsIcon },
+  { id: "categories", label: "Categories", icon: CategoriesIcon },
 ];
 
 function Shell() {
@@ -103,6 +106,7 @@ function Shell() {
           <HomeView onAdded={() => setView("downloads")} />
         )}
         {view === "downloads" && <DownloadsView animateReorder={reorderAnim} />}
+        {view === "categories" && <CategoriesView />}
         {view === "settings" && (
           <SettingsView
             accent={accent}

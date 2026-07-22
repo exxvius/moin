@@ -32,6 +32,8 @@ export interface Task {
   active_ms: number;
   /** Id of the backend that ran this download ("embedded"/"aria2"), else null. */
   backend: string | null;
+  /** Id of the category this download is filed under, else null. */
+  category: string | null;
 }
 
 export interface TaskProgress {
@@ -48,6 +50,8 @@ export interface Settings {
   max_concurrent: number;
   /** Max parallel connections per download (1 = single stream). */
   connections: number;
+  /** Smallest piece worth its own connection, in bytes. Drives both engines. */
+  min_split_size: number;
   download_dir: string | null;
   /** Explicit path to a user-supplied aria2c binary, else null. */
   aria2_path: string | null;
@@ -79,4 +83,40 @@ export interface ToolStatus {
 export interface ToolProgress {
   received: number;
   total: number | null;
+}
+
+/** How a download entered moin. Manual now; watch methods arrive with automation. */
+export type AddMethodKind =
+  | "manual-link"
+  | "manual-torrent"
+  | "watch-folder"
+  | "watch-url-file";
+
+/** One content condition. Tag mirrors the Rust `Trigger` enum (kebab-case). */
+export type Trigger =
+  | { type: "extension"; exts: string[] }
+  | { type: "size"; min: number | null; max: number | null }
+  | { type: "url-pattern"; patterns: string[] }
+  | { type: "name-pattern"; patterns: string[] };
+
+export type TriggerType = Trigger["type"];
+
+/** A named bucket plus the rules that file downloads into it. */
+export interface Category {
+  id: string;
+  name: string;
+  /** Accent id for the chip/dot color. */
+  color: string;
+  /** Optional icon id from the curated set; null shows the color dot. */
+  icon: string | null;
+  /** Optional save-folder override; null = default download dir. */
+  save_dir: string | null;
+  /** Which add-methods this category accepts; empty = any source. */
+  sources: AddMethodKind[];
+  /** Content conditions; all must pass for a download to match. */
+  triggers: Trigger[];
+  /** Automated sources only (later): download non-matching items uncategorized. */
+  fallback_download: boolean;
+  /** Priority; lower wins when several match. */
+  order: number;
 }

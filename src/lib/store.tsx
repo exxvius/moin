@@ -7,11 +7,14 @@ import {
   useEffect,
   useMemo,
   useReducer,
+  useState,
+  type Dispatch,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 import { api } from "./api";
 import { subscribeTasks } from "./events";
-import type { Task, TaskProgress } from "./types";
+import type { Category, Task, TaskProgress } from "./types";
 
 interface State {
   /** Tasks by id. */
@@ -85,7 +88,11 @@ interface StoreValue {
   /** Newest first, finished (completed/failed/canceled). */
   finished: Task[];
   speeds: Record<string, number>;
-  add: (url: string) => Promise<void>;
+  /** Categories in priority order. */
+  categories: Category[];
+  /** Replace the category list (accepts a value or an updater fn). */
+  setCategories: Dispatch<SetStateAction<Category[]>>;
+  add: (url: string, category?: string | null) => Promise<void>;
   pause: (id: string) => Promise<void>;
   resume: (id: string) => Promise<void>;
   cancel: (id: string) => Promise<void>;
@@ -99,6 +106,11 @@ const StoreContext = createContext<StoreValue | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initial);
+  const [categories, setCategories] = useState<Category[]>([]);
+
+  useEffect(() => {
+    api.listCategories().then(setCategories).catch(() => {});
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -131,8 +143,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       active: all.filter((t) => ACTIVE.includes(t.status)),
       finished: all.filter((t) => !ACTIVE.includes(t.status)),
       speeds: state.speeds,
-      add: async (url) => {
-        await api.addDownload(url);
+      categories,
+      setCategories,
+      add: async (url, category) => {
+        await api.addDownload(url, category);
       },
       pause: (id) => api.pauseDownload(id),
       resume: (id) => api.resumeDownload(id),
@@ -142,7 +156,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       retry: (id) => api.retryDownload(id),
       forget: (id) => api.forgetDownload(id),
     };
-  }, [state]);
+  }, [state, categories]);
 
   return (
     <StoreContext.Provider value={value}>{children}</StoreContext.Provider>

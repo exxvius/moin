@@ -1,6 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ConfirmModal } from "../components/ConfirmModal";
+import { Select } from "../components/Select";
 import { useStore } from "../lib/store";
+import { api } from "../lib/api";
+import { CategoryIcon } from "../components/CategoryIcon";
 
 interface Props {
   onAdded: () => void;
@@ -13,13 +16,39 @@ export function HomeView({ onAdded }: Props) {
   const [busy, setBusy] = useState(false);
   // Set when the entered URL is already in the queue and we need to confirm.
   const [dupUrl, setDupUrl] = useState<string | null>(null);
+  // "" = uncategorized. Auto-filled from the URL until the user picks manually.
+  const [category, setCategory] = useState("");
+  const [touched, setTouched] = useState(false);
+
+  // Suggest a category from the URL (debounced). A manual pick (touched) sticks;
+  // clearing the box re-enables auto-suggest.
+  useEffect(() => {
+    const value = url.trim();
+    if (!value) {
+      setTouched(false);
+      setCategory("");
+      return;
+    }
+    if (touched) return;
+    const t = setTimeout(() => {
+      api
+        .suggestCategory(value)
+        .then((id) => {
+          if (!touched) setCategory(id ?? "");
+        })
+        .catch(() => {});
+    }, 300);
+    return () => clearTimeout(t);
+  }, [url, touched]);
 
   const doAdd = async (value: string) => {
     setBusy(true);
     setError(null);
     try {
-      await store.add(value);
+      await store.add(value, category || null);
       setUrl("");
+      setCategory("");
+      setTouched(false);
       onAdded();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -61,6 +90,29 @@ export function HomeView({ onAdded }: Props) {
               if (e.key === "Enter") submit();
             }}
           />
+          {store.categories.length > 0 && (
+            <Select
+              value={category}
+              ariaLabel="Category"
+              caret
+              onChange={(v) => {
+                setCategory(v);
+                setTouched(true);
+              }}
+              options={[
+                { value: "", label: "Uncategorized" },
+                ...store.categories.map((c) => ({
+                  value: c.id,
+                  label: (
+                    <span className="accent-option">
+                      <CategoryIcon icon={c.icon} color={c.color} size={16} />
+                      {c.name}
+                    </span>
+                  ),
+                })),
+              ]}
+            />
+          )}
           <button
             className="btn-primary"
             onClick={submit}
