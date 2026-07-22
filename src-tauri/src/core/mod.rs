@@ -2,6 +2,7 @@
 //! unit-tested without the shell. The Tauri layer talks to [`engine::Engine`]
 //! and implements [`engine::Emitter`] to forward events to the UI.
 
+pub mod aria2;
 pub mod backend;
 pub mod embedded;
 pub mod engine;
@@ -10,6 +11,7 @@ pub mod segmented;
 pub mod settings;
 pub mod store;
 pub mod task;
+pub mod tool;
 
 // Torrent (librqbit) and media (yt-dlp) backends land in later phases, alongside
 // aria2c — each just a new `impl DownloadBackend` registered in the engine.

@@ -77,6 +77,9 @@ pub fn run() {
             commands::set_settings,
             commands::list_backends,
             commands::default_download_dir,
+            commands::tool_status,
+            commands::download_tool,
+            commands::set_tool_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running moin");

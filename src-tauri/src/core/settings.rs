@@ -25,6 +25,11 @@ pub struct Settings {
     pub connections: usize,
     /// Default destination folder; `None` means the OS Downloads folder.
     pub download_dir: Option<String>,
+    /// Explicit path to a user-supplied aria2c binary (the "bring your own"
+    /// override in the resolve chain). `None` means fall back to the managed
+    /// copy, a binary beside the exe, or `PATH`.
+    #[serde(default)]
+    pub aria2_path: Option<String>,
 }
 
 fn default_connections() -> usize {
@@ -39,6 +44,7 @@ impl Default for Settings {
             max_concurrent: DEFAULT_CONCURRENCY,
             connections: DEFAULT_CONNECTIONS,
             download_dir: None,
+            aria2_path: None,
         }
     }
 }

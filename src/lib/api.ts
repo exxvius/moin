@@ -1,7 +1,7 @@
 // Thin typed wrappers over Tauri `invoke`.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { BackendInfo, Settings, Task } from "./types";
+import type { BackendInfo, Settings, Task, ToolStatus } from "./types";
 
 export const api = {
   addDownload: (url: string) => invoke<Task>("add_download", { url }),
@@ -18,4 +18,8 @@ export const api = {
     invoke<void>("set_settings", { settings }),
   listBackends: () => invoke<BackendInfo[]>("list_backends"),
   defaultDownloadDir: () => invoke<string>("default_download_dir"),
+  toolStatus: () => invoke<ToolStatus>("tool_status"),
+  downloadTool: () => invoke<ToolStatus>("download_tool"),
+  setToolPath: (path: string | null) =>
+    invoke<ToolStatus>("set_tool_path", { path }),
 };

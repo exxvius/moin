@@ -30,12 +30,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 
 # Async runtime for the download engines (librqbit + media land in later phases;
-# Tauri already hosts a tokio runtime we build on).
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "io-util", "time"] }
+# Tauri already hosts a tokio runtime we build on). `process` drives the managed
+# aria2c daemon and its `--version` probe.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "io-util", "time", "process"] }
 
 # Direct HTTP downloads: streaming bodies + Range-based resume. rustls keeps the
 # TLS stack self-contained (no system OpenSSL).
-reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "http2", "charset"] }
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "http2", "charset", "json"] }
 futures-util = "0.3"
 # Async methods on the pluggable DownloadBackend trait (dyn-dispatched).
 async-trait = "0.1"
@@ -43,6 +44,11 @@ async-trait = "0.1"
 # Download registry + resume state.
 rusqlite = { version = "0.31", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
+
+# Managed-tool fetch: unzip the aria2c release archive and checksum it before we
+# trust the binary.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
 
 [features]
 # Enable custom protocol in production; keep default off for dev.

@@ -1,13 +1,14 @@
 // Task event names + a typed subscriber. Names mirror src-tauri/src/events.rs.
 
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { Task, TaskProgress } from "./types";
+import type { Task, TaskProgress, ToolProgress } from "./types";
 
 export const EV = {
   added: "moin-task-added",
   progress: "moin-task-progress",
   updated: "moin-task-updated",
   removed: "moin-task-removed",
+  toolProgress: "moin-tool-progress",
 } as const;
 
 export interface TaskHandlers {
@@ -26,4 +27,11 @@ export async function subscribeTasks(h: TaskHandlers): Promise<UnlistenFn> {
     listen<string>(EV.removed, (e) => h.onRemoved?.(e.payload)),
   ]);
   return () => unlisteners.forEach((u) => u());
+}
+
+/** Subscribe to aria2c binary-download progress; returns an unlisten function. */
+export function subscribeToolProgress(
+  onProgress: (p: ToolProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<ToolProgress>(EV.toolProgress, (e) => onProgress(e.payload));
 }

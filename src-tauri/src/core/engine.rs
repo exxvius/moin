@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
+use super::aria2::Aria2Backend;
 use super::backend::{
     BackendInfo, Control, DownloadBackend, Outcome, ProgressFn, Signal, TransferOpts,
 };
@@ -16,6 +17,7 @@ use super::embedded::EmbeddedBackend;
 use super::settings::Settings;
 use super::store::Store;
 use super::task::{filename_from_url, now_ms, Task, TaskKind, TaskProgress, TaskStatus};
+use super::tool::{Aria2Tool, ToolStatus};
 
 /// How the engine reports changes to the outside world (the UI, via Tauri).
 pub trait Emitter: Send + Sync + 'static {
@@ -39,6 +41,9 @@ struct Inner {
     data_dir: PathBuf,
     emitter: Arc<dyn Emitter>,
     backends: Vec<Arc<dyn DownloadBackend>>,
+    /// The managed aria2c binary, shared with the aria2 backend so a fresh
+    /// download or a new bring-your-own path takes effect everywhere at once.
+    tool: Arc<Aria2Tool>,
     settings: Mutex<Settings>,
     tasks: Mutex<HashMap<String, Entry>>,
     store: Mutex<Store>,
@@ -75,13 +80,21 @@ impl Engine {
 
         sweep_orphan_parts(tasks.values().map(|e| &e.task));
 
-        let backends: Vec<Arc<dyn DownloadBackend>> = vec![Arc::new(EmbeddedBackend::new())];
+        let tool = Arc::new(Aria2Tool::new(
+            data_dir.clone(),
+            settings.aria2_path.clone(),
+        ));
+        let backends: Vec<Arc<dyn DownloadBackend>> = vec![
+            Arc::new(EmbeddedBackend::new()),
+            Arc::new(Aria2Backend::new(tool.clone())),
+        ];
 
         Ok(Self {
             inner: Arc::new(Inner {
                 data_dir,
                 emitter,
                 backends,
+                tool,
                 settings: Mutex::new(settings),
                 tasks: Mutex::new(tasks),
                 store: Mutex::new(store),
@@ -309,6 +322,9 @@ impl Engine {
     }
 
     pub fn set_settings(&self, next: Settings) {
+        // Keep the aria2c resolver in step with the persisted override so both
+        // save paths (general settings and the tool picker) agree.
+        self.inner.tool.set_override(next.aria2_path.clone());
         {
             let mut s = self.inner.settings.lock().unwrap();
             *s = next.clone();
@@ -324,6 +340,33 @@ impl Engine {
             .iter()
             .map(|b| BackendInfo::of(b.as_ref()))
             .collect()
+    }
+
+    /// Current aria2c status (resolved path, version, where it came from).
+    pub async fn tool_status(&self) -> ToolStatus {
+        self.inner.tool.status().await
+    }
+
+    /// Download and install the managed aria2c build (Windows). `progress` reports
+    /// the archive download so the UI can show a bar.
+    pub async fn install_tool(
+        &self,
+        progress: impl Fn(u64, Option<u64>) + Send + Sync,
+    ) -> Result<ToolStatus, String> {
+        self.inner.tool.install(progress).await
+    }
+
+    /// Point aria2c at a user-supplied binary (or clear the override with `None`),
+    /// persist it, and return the refreshed status.
+    pub async fn set_tool_path(&self, path: Option<String>) -> ToolStatus {
+        let path = path.filter(|p| !p.trim().is_empty());
+        self.inner.tool.set_override(path.clone());
+        {
+            let mut s = self.inner.settings.lock().unwrap();
+            s.aria2_path = path;
+            s.save(&self.inner.data_dir);
+        }
+        self.inner.tool.status().await
     }
 
     fn persist_emit(&self, task: &Task) {

@@ -13,3 +13,7 @@ pub const TASK_PROGRESS: &str = "moin-task-progress";
 pub const TASK_UPDATED: &str = "moin-task-updated";
 /// A task was removed from the registry. Payload: the task id string.
 pub const TASK_REMOVED: &str = "moin-task-removed";
+
+/// Progress while a managed tool (aria2c) downloads its binary. Payload:
+/// `ToolProgress` — received/total bytes of the archive.
+pub const TOOL_PROGRESS: &str = "moin-tool-progress";

@@ -3,12 +3,14 @@
 use std::path::PathBuf;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::core::backend::BackendInfo;
 use crate::core::engine::Engine;
 use crate::core::settings::Settings;
 use crate::core::task::Task;
+use crate::core::tool::ToolStatus;
+use crate::events;
 
 /// Shared app state: just the engine for now.
 pub struct AppState {
@@ -115,6 +117,43 @@ pub async fn set_settings(state: State<'_, AppState>, settings: Settings) -> Res
 #[tauri::command]
 pub fn list_backends(state: State<'_, AppState>) -> Vec<BackendInfo> {
     state.engine.backends()
+}
+
+/// Byte progress while the aria2c archive downloads.
+#[derive(Clone, Serialize)]
+pub struct ToolProgress {
+    pub received: u64,
+    pub total: Option<u64>,
+}
+
+/// Current aria2c status: resolved path, version, and where it came from.
+#[tauri::command]
+pub async fn tool_status(state: State<'_, AppState>) -> Result<ToolStatus, String> {
+    Ok(state.engine.tool_status().await)
+}
+
+/// Download and install the managed aria2c build (Windows). Emits
+/// `moin-tool-progress` while the archive downloads.
+#[tauri::command]
+pub async fn download_tool(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ToolStatus, String> {
+    state
+        .engine
+        .install_tool(move |received, total| {
+            let _ = app.emit(events::TOOL_PROGRESS, ToolProgress { received, total });
+        })
+        .await
+}
+
+/// Set (or clear, with `null`) the bring-your-own aria2c path.
+#[tauri::command]
+pub async fn set_tool_path(
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> Result<ToolStatus, String> {
+    Ok(state.engine.set_tool_path(path).await)
 }
 
 /// The default download folder, for display in the UI.

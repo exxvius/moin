@@ -47,6 +47,8 @@ export interface Settings {
   /** Max parallel connections per download (1 = single stream). */
   connections: number;
   download_dir: string | null;
+  /** Explicit path to a user-supplied aria2c binary, else null. */
+  aria2_path: string | null;
 }
 
 export interface BackendInfo {
@@ -55,4 +57,24 @@ export interface BackendInfo {
   http: boolean;
   torrent: boolean;
   available: boolean;
+}
+
+/** Which link in the resolve chain provided a managed tool's binary. */
+export type ToolSource = "override" | "env" | "managed" | "beside" | "path";
+
+/** aria2c availability snapshot, for the Settings tool row. */
+export interface ToolStatus {
+  id: string;
+  present: boolean;
+  path: string | null;
+  version: string | null;
+  source: ToolSource | null;
+  /** Whether this platform can fetch the binary in-app (Windows only). */
+  can_fetch: boolean;
+}
+
+/** Byte progress while a managed tool downloads its binary. */
+export interface ToolProgress {
+  received: number;
+  total: number | null;
 }
