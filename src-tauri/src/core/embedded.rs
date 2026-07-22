@@ -1,22 +1,36 @@
 //! The built-in backend: reqwest for HTTP today, librqbit for BitTorrent once
 //! the torrent phase lands. It's always available and needs no external tools.
 
-use super::backend::{Control, DownloadBackend, Outcome, ProgressFn, TransferOpts};
+use std::sync::Mutex;
+use std::time::Duration;
+
+use super::backend::{Control, DownloadBackend, NetConfig, Outcome, ProgressFn, TransferOpts};
 use super::http;
 use super::task::{Task, TaskKind};
 
 pub struct EmbeddedBackend {
-    client: reqwest::Client,
+    /// Behind a mutex so a connect-timeout change rebuilds it in place. Cloning a
+    /// `reqwest::Client` is cheap (it's `Arc` inside), so `run` takes a clone and
+    /// drops the lock before doing any I/O.
+    client: Mutex<reqwest::Client>,
 }
 
 impl EmbeddedBackend {
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .user_agent(concat!("moin/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .unwrap_or_default();
-        Self { client }
+        Self {
+            client: Mutex::new(build_client(None)),
+        }
     }
+}
+
+/// Build the HTTP client, applying `connect_timeout` when set.
+fn build_client(connect_timeout: Option<Duration>) -> reqwest::Client {
+    let mut builder =
+        reqwest::Client::builder().user_agent(concat!("moin/", env!("CARGO_PKG_VERSION")));
+    if let Some(timeout) = connect_timeout {
+        builder = builder.connect_timeout(timeout);
+    }
+    builder.build().unwrap_or_default()
 }
 
 impl Default for EmbeddedBackend {
@@ -40,6 +54,10 @@ impl DownloadBackend for EmbeddedBackend {
         matches!(kind, TaskKind::Http)
     }
 
+    fn reconfigure(&self, net: NetConfig) {
+        *self.client.lock().unwrap() = build_client(net.connect_timeout);
+    }
+
     async fn run(
         &self,
         task: Task,
@@ -49,8 +67,9 @@ impl DownloadBackend for EmbeddedBackend {
     ) -> Outcome {
         match task.kind {
             TaskKind::Http => {
+                let client = self.client.lock().unwrap().clone();
                 http::download(
-                    &self.client,
+                    &client,
                     &task.url,
                     &task.part_path(),
                     &task.dest,
@@ -58,6 +77,7 @@ impl DownloadBackend for EmbeddedBackend {
                     opts.connections.max(1),
                     opts.min_split_size,
                     opts.hide_part,
+                    opts.stall_timeout,
                     &control,
                     &progress,
                 )

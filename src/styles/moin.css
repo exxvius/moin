@@ -272,9 +272,15 @@
 .view.categories .view-head {
   margin-bottom: 0;
 }
-.cat-toolbar {
+/* Heading text on the left, the New-category action inline on the right. */
+.cat-head {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+.cat-head .btn-primary {
+  flex: none;
 }
 .cat-panel {
   flex: 1;
@@ -1462,12 +1468,16 @@
 /* Stats card up top. */
 .stat-card {
   flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-6);
 }
 .stat-hero {
   display: flex;
   align-items: baseline;
   gap: var(--space-3);
-  margin-bottom: var(--space-5);
 }
 .stat-hero-num {
   font-size: var(--text-2xl);

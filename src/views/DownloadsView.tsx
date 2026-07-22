@@ -12,7 +12,7 @@ import { SmoothScroll } from "../components/SmoothScroll";
 import { ContextMenu, type MenuEntry } from "../components/ContextMenu";
 import { GhostGlowLayer } from "../components/GhostGlowLayer";
 import { useListSelection } from "../lib/useListSelection";
-import { useStore } from "../lib/store";
+import { useStore, type MoveProgress } from "../lib/store";
 import { categorySwatch, findCategory } from "../lib/categories";
 import { CategoryIcon } from "../components/CategoryIcon";
 import type { Category } from "../lib/types";
@@ -31,8 +31,10 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   connecting: "Connecting",
   downloading: "Downloading",
   paused: "Paused",
+  moving: "Moving",
   completed: "Done",
   failed: "Failed",
+  stalled: "Stalled",
   canceled: "Canceled",
 };
 
@@ -41,8 +43,10 @@ const STATUS_CLASS: Record<TaskStatus, string> = {
   connecting: "accent",
   downloading: "accent",
   paused: "warn",
+  moving: "accent",
   completed: "ok",
   failed: "bad",
+  stalled: "warn",
   canceled: "faint",
 };
 
@@ -57,7 +61,8 @@ const FILTERS: { id: FilterId; label: string; match: (t: Task) => boolean }[] = 
       !t.archived &&
       (t.status === "downloading" ||
         t.status === "connecting" ||
-        t.status === "queued"),
+        t.status === "queued" ||
+        t.status === "moving"),
   },
   {
     id: "paused",
@@ -72,7 +77,11 @@ const FILTERS: { id: FilterId; label: string; match: (t: Task) => boolean }[] = 
   {
     id: "issues",
     label: "Issues",
-    match: (t) => !t.archived && (t.status === "failed" || t.status === "canceled"),
+    match: (t) =>
+      !t.archived &&
+      (t.status === "failed" ||
+        t.status === "canceled" ||
+        t.status === "stalled"),
   },
   { id: "archived", label: "Archived", match: (t) => t.archived },
 ];
@@ -162,12 +171,14 @@ function fitColumns(all: Column[], avail: number): Column[] {
 
 const STATUS_RANK: Record<TaskStatus, number> = {
   downloading: 0,
-  connecting: 1,
-  queued: 2,
-  paused: 3,
-  completed: 4,
-  failed: 5,
-  canceled: 6,
+  moving: 1,
+  connecting: 2,
+  queued: 3,
+  paused: 4,
+  stalled: 5,
+  completed: 6,
+  failed: 7,
+  canceled: 8,
 };
 
 // The live bar shimmer/glow cycle (must match `bar-flow`/`bar-pulse` in CSS).
@@ -312,6 +323,8 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   const [expanded, setExpanded] = useState<string | null>(null);
   // When true, the menu's "Remove" has expanded into remove/delete choices.
   const [confirmRemove, setConfirmRemove] = useState(false);
+  // When true, the menu is showing the category picker for "Move to category".
+  const [moveOpen, setMoveOpen] = useState(false);
   // Error message to surface in a popup (e.g. a file delete that failed).
   const [error, setError] = useState<string | null>(null);
   // Live width of the list, so columns can drop out when the window is narrow.
@@ -499,6 +512,7 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   const openMenu = (e: ReactMouseEvent, task: Task) => {
     e.preventDefault();
     setConfirmRemove(false);
+    setMoveOpen(false);
     sel.ensure(task.id);
     setMenu({ x: e.clientX, y: e.clientY });
   };
@@ -506,6 +520,7 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   const closeMenu = () => {
     setMenu(null);
     setConfirmRemove(false);
+    setMoveOpen(false);
   };
 
   const copyLinks = (tasks: Task[]): MenuEntry => ({
@@ -528,8 +543,44 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
     });
   };
 
-  const menuItems = (tasks: Task[]): MenuEntry[] =>
-    tasks.length <= 1 ? singleMenu(tasks[0]) : multiMenu(tasks);
+  // The category picker the "Move to category…" entry expands into — each row
+  // carries the category's icon and its color, matching the filter dropdown.
+  const moveCategoryList = (tasks: Task[]): MenuEntry[] => {
+    const ids = tasks.map((t) => t.id);
+    const move = (category: string | null) =>
+      store.moveToCategory(ids, category).catch((e) => setError(errorText(e)));
+    const items: MenuEntry[] = store.categories.map((c) => ({
+      label: (
+        <span className="accent-option">
+          <CategoryIcon icon={c.icon} color={c.color} size={15} />
+          <span style={c.color ? { color: categorySwatch(c.color) } : undefined}>
+            {c.name}
+          </span>
+        </span>
+      ),
+      onClick: () => move(c.id),
+    }));
+    items.push({ label: "Uncategorized", onClick: () => move(null) });
+    return items;
+  };
+
+  // The entry that opens the category picker (only when categories exist).
+  const moveEntry = (): MenuEntry | null =>
+    store.categories.length === 0
+      ? null
+      : {
+          label: "Move to category…",
+          keepOpen: true,
+          onClick: () => {
+            setConfirmRemove(false);
+            setMoveOpen(true);
+          },
+        };
+
+  const menuItems = (tasks: Task[]): MenuEntry[] => {
+    if (moveOpen) return moveCategoryList(tasks);
+    return tasks.length <= 1 ? singleMenu(tasks[0]) : multiMenu(tasks);
+  };
 
   // Single row: the original, nicely-worded per-item menu.
   const singleMenu = (task: Task): MenuEntry[] => {
@@ -552,10 +603,19 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
       return items;
     }
 
+    // Mid-relocation: actions are held until the move finishes, so keep it simple.
+    if (task.status === "moving") {
+      return [copyLinks([task])];
+    }
+
     const items: MenuEntry[] = [];
     if (task.status === "paused") {
       items.push({ label: "Resume download", onClick: () => store.resume(task.id) });
-    } else if (task.status === "failed" || task.status === "canceled") {
+    } else if (
+      task.status === "failed" ||
+      task.status === "canceled" ||
+      task.status === "stalled"
+    ) {
       items.push({ label: "Try again", onClick: () => store.resume(task.id) });
     } else if (task.status !== "completed") {
       items.push({ label: "Pause download", onClick: () => store.pause(task.id) });
@@ -566,12 +626,15 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
         onClick: () => revealItemInDir(task.dest).catch(() => {}),
       });
     }
+    const mv = moveEntry();
+    if (mv) items.push(mv);
     items.push(copyLinks([task]), { separator: true });
 
     const active =
       task.status !== "completed" &&
       task.status !== "failed" &&
-      task.status !== "canceled";
+      task.status !== "canceled" &&
+      task.status !== "stalled";
     if (active) {
       items.push({
         label: "Cancel download",
@@ -637,12 +700,15 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
     const isActive = (t: Task) =>
       t.status !== "completed" &&
       t.status !== "failed" &&
-      t.status !== "canceled";
+      t.status !== "canceled" &&
+      t.status !== "stalled" &&
+      t.status !== "moving";
     const resumable = tasks.filter(
       (t) =>
         t.status === "paused" ||
         t.status === "failed" ||
-        t.status === "canceled",
+        t.status === "canceled" ||
+        t.status === "stalled",
     );
     const pausable = tasks.filter((t) => isActive(t) && t.status !== "paused");
     const cancelable = tasks.filter(isActive);
@@ -661,6 +727,8 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
         onClick: () => runAll(pausable.map((t) => t.id), store.pause),
       });
     }
+    const mv = moveEntry();
+    if (mv) items.push(mv);
     items.push(copyLinks(tasks), { separator: true });
     if (cancelable.length) {
       items.push({
@@ -773,7 +841,15 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
                     label: (
                       <span className="accent-option">
                         <CategoryIcon icon={c.icon} color={c.color} size={16} />
-                        {c.name}
+                        <span
+                          style={
+                            c.color
+                              ? { color: categorySwatch(c.color) }
+                              : undefined
+                          }
+                        >
+                          {c.name}
+                        </span>
                       </span>
                     ),
                   })),
@@ -846,6 +922,7 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
                 key={t.id}
                 task={t}
                 speed={store.speeds[t.id] ?? 0}
+                move={store.moves[t.id]}
                 expanded={expanded === t.id}
                 selected={sel.isSelected(t.id)}
                 archived={isArchived}
@@ -889,7 +966,11 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
           y={menu.y}
           items={menuItems(menuTasks)}
           heading={
-            menuTasks.length > 1 ? `${menuTasks.length} selected` : undefined
+            moveOpen
+              ? "Move to category"
+              : menuTasks.length > 1
+                ? `${menuTasks.length} selected`
+                : undefined
           }
           onClose={closeMenu}
         />
@@ -973,6 +1054,8 @@ function sortRows(
 interface CardProps {
   task: Task;
   speed: number;
+  /** Relocation progress while the task is Moving, else undefined. */
+  move?: MoveProgress;
   expanded: boolean;
   selected: boolean;
   archived: boolean;
@@ -985,6 +1068,7 @@ interface CardProps {
 function Card({
   task,
   speed,
+  move,
   expanded,
   selected,
   archived,
@@ -994,15 +1078,22 @@ function Card({
   onContext,
 }: CardProps) {
   const cat = findCategory(categories, task.category);
-  const pct = percent(task.received, task.total);
-  const remaining = task.total != null ? task.total - task.received : null;
   const dl = task.status === "downloading";
+  const moving = task.status === "moving";
+  // While moving, the bar tracks the file relocation, not the download bytes.
+  const movePct =
+    moving && move && move.total ? percent(move.moved, move.total) : null;
+  const pct = moving ? movePct : percent(task.received, task.total);
+  const remaining = task.total != null ? task.total - task.received : null;
   // Indeterminate (sliding) bar only when there's genuinely no progress to show.
   // A queued/connecting task that already has partial progress shows a real bar.
   const indeterminate =
     pct == null &&
-    (dl || task.status === "queued" || task.status === "connecting");
-  const live = dl && !indeterminate;
+    (dl ||
+      moving ||
+      task.status === "queued" ||
+      task.status === "connecting");
+  const live = (dl || moving) && !indeterminate;
 
   // Phase-align every live bar's shimmer/glow to a shared clock by fixing a
   // negative animation-delay when the bar goes live. All bars then show the same

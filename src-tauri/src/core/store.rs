@@ -165,8 +165,10 @@ fn status_str(s: TaskStatus) -> &'static str {
         TaskStatus::Connecting => "connecting",
         TaskStatus::Downloading => "downloading",
         TaskStatus::Paused => "paused",
+        TaskStatus::Moving => "moving",
         TaskStatus::Completed => "completed",
         TaskStatus::Failed => "failed",
+        TaskStatus::Stalled => "stalled",
         TaskStatus::Canceled => "canceled",
     }
 }
@@ -177,7 +179,9 @@ fn parse_status(s: &str) -> TaskStatus {
         "connecting" => TaskStatus::Connecting,
         "downloading" => TaskStatus::Downloading,
         "paused" => TaskStatus::Paused,
+        "moving" => TaskStatus::Moving,
         "completed" => TaskStatus::Completed,
+        "stalled" => TaskStatus::Stalled,
         "canceled" => TaskStatus::Canceled,
         _ => TaskStatus::Failed,
     }

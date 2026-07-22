@@ -26,6 +26,20 @@ const CONNECTION_OPTIONS = [1, 2, 4, 6, 8, 12, 16];
 const MIB = 1024 * 1024;
 const MIN_SPLIT_OPTIONS = [1, 2, 4, 8, 16, 32].map((m) => m * MIB);
 
+// Seconds of no data before a download is marked Stalled; 0 = wait forever.
+const STALL_OPTIONS = [30, 60, 120, 300, 0];
+// Seconds to wait to establish a connection; 0 = the OS default.
+const CONNECT_OPTIONS = [5, 10, 15, 30, 60, 0];
+
+/** "45 seconds" / "2 minutes" for a whole number of seconds. */
+function secondsLabel(n: number): string {
+  if (n % 60 === 0) {
+    const m = n / 60;
+    return m === 1 ? "1 minute" : `${m} minutes`;
+  }
+  return `${n} seconds`;
+}
+
 export function SettingsView({
   accent,
   setAccent,
@@ -222,6 +236,81 @@ export function SettingsView({
             ariaLabel="Hide partial downloads"
             disabled={!settings}
             onChange={(v) => patch({ hide_part_files: v })}
+          />
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-title">Behavior</div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Changing a download's category</div>
+            <div className="dim">
+              What happens when you move a download to another category. Move the
+              file and moin relocates it into that category's folder, showing a
+              Moving status until it lands, then resumes or marks it done.
+            </div>
+          </div>
+          <Select
+            value={settings?.category_change ?? "change-only"}
+            ariaLabel="Category change behavior"
+            caret
+            disabled={!settings}
+            onChange={(v) =>
+              patch({ category_change: v as Settings["category_change"] })
+            }
+            options={[
+              { value: "change-only", label: "Just change the category" },
+              { value: "move-file", label: "Move file to category folder" },
+            ]}
+          />
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-title">Advanced</div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Stall timeout</div>
+            <div className="dim">
+              How long a download may go without receiving any data before it's
+              marked Stalled. A stalled download keeps its progress — retry it
+              from the right-click menu. Set to Never to keep waiting.
+            </div>
+          </div>
+          <Select
+            value={String(settings?.stall_timeout_secs ?? 60)}
+            ariaLabel="Stall timeout"
+            caret
+            disabled={!settings}
+            onChange={(v) => patch({ stall_timeout_secs: Number(v) })}
+            options={STALL_OPTIONS.map((n) => ({
+              value: String(n),
+              label: n === 0 ? "Never" : secondsLabel(n),
+            }))}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Connection timeout</div>
+            <div className="dim">
+              How long to wait to reach a server before giving up on the
+              connection. Applies to the built-in engine.
+            </div>
+          </div>
+          <Select
+            value={String(settings?.connect_timeout_secs ?? 30)}
+            ariaLabel="Connection timeout"
+            caret
+            disabled={!settings}
+            onChange={(v) => patch({ connect_timeout_secs: Number(v) })}
+            options={CONNECT_OPTIONS.map((n) => ({
+              value: String(n),
+              label: n === 0 ? "No limit" : secondsLabel(n),
+            }))}
           />
         </div>
       </div>

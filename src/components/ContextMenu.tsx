@@ -3,12 +3,13 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
 
 export type MenuEntry =
   | {
-      label: string;
+      label: ReactNode;
       onClick: () => void;
       danger?: boolean;
       disabled?: boolean;

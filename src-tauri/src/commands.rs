@@ -203,6 +203,20 @@ pub async fn reorder_categories(
     Ok(state.engine.reorder_categories(ids))
 }
 
+/// Move one or more downloads to a category (`None` = uncategorized). Whether the
+/// file is relocated or just re-tagged depends on the category-change setting.
+#[tauri::command]
+pub async fn move_to_category(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+    category: Option<String>,
+) -> Result<(), String> {
+    let dir = download_dir(&app, &state);
+    state.engine.move_to_category(ids, category, dir);
+    Ok(())
+}
+
 /// The default download folder, for display in the UI.
 #[tauri::command]
 pub fn default_download_dir(app: AppHandle, state: State<'_, AppState>) -> String {

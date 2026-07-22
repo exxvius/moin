@@ -9,6 +9,7 @@
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::task::{Task, TaskKind};
 
@@ -57,6 +58,18 @@ pub struct TransferOpts {
     pub min_split_size: u64,
     /// Hide the in-progress `.part` artifacts via the OS hidden attribute.
     pub hide_part: bool,
+    /// How long a transfer may receive no data before it's declared stalled.
+    /// `Duration::ZERO` means never — wait indefinitely for data to resume.
+    pub stall_timeout: Duration,
+}
+
+/// Network settings a backend applies to its client, refreshed when settings
+/// change. Backends that build their own client (the embedded one) act on it;
+/// others ignore it.
+#[derive(Debug, Clone, Copy)]
+pub struct NetConfig {
+    /// Max time to establish a connection, or `None` for the OS default.
+    pub connect_timeout: Option<Duration>,
 }
 
 /// How a transfer ended. The supervisor maps this onto a [`TaskStatus`].
@@ -65,6 +78,9 @@ pub enum Outcome {
     Completed,
     Paused,
     Canceled,
+    /// No data arrived within the stall window. Distinct from `Failed`: the
+    /// partial is kept and the download can resume from where it left off.
+    Stalled,
     Failed(String),
 }
 
@@ -90,6 +106,10 @@ pub trait DownloadBackend: Send + Sync {
     fn available(&self) -> bool {
         true
     }
+
+    /// Apply network settings (e.g. connect timeout) that changed at run time.
+    /// Backends that build their own client rebuild it; others ignore it.
+    fn reconfigure(&self, _net: NetConfig) {}
 
     /// Drive `task` to a terminal [`Outcome`], honoring `control` and reporting
     /// progress via `progress`. `task.received` is the byte offset to resume from;

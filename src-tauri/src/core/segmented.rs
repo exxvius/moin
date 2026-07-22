@@ -20,12 +20,10 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 use super::backend::{Control, Outcome, ProgressFn, Signal};
 use super::fsattr;
-use super::http::{finalize, friendly};
+use super::http::{finalize, friendly, stall_limit};
 
 /// How long a worker waits on the socket before waking to re-check pause/cancel.
 const POLL: Duration = Duration::from_secs(2);
-/// Consecutive stalls (~`POLL` each) before a worker calls the connection dead.
-const STALL_LIMIT: u32 = 30; // ~60s with no data
 
 /// One contiguous slice of the file, and how far it's been filled.
 #[derive(Clone, Serialize, Deserialize)]
@@ -89,9 +87,11 @@ pub async fn download(
     connections: usize,
     min_segment: u64,
     hide_part: bool,
+    stall_timeout: Duration,
     control: &Control,
     progress: &ProgressFn,
 ) -> Outcome {
+    let stall_max = stall_limit(stall_timeout, POLL);
     // Resume a saved plan, or lay out a fresh one and pre-size the file.
     let segs = if plan_matches(meta_path, part, total).await {
         match load_meta(meta_path).await {
@@ -128,6 +128,7 @@ pub async fn download(
             idx,
             seg: seg.clone(),
             total,
+            stall_max,
             shared: shared.clone(),
             received: received.clone(),
             aborted: aborted.clone(),
@@ -153,18 +154,31 @@ pub async fn download(
         Signal::Run => {}
     }
 
-    // A worker failed (not a user stop): keep the plan so a retry resumes.
-    let failure = results.into_iter().find_map(|r| match r {
-        Ok(SegResult::Failed(e)) => Some(e),
-        Ok(_) => None,
-        Err(join) => Some(format!("a download worker crashed: {join}")),
-    });
-    if let Some(err) = failure {
+    // Sort the workers' endings: a hard error wins over a stall (a real problem
+    // beats "no data"), and either keeps the plan so a resume can pick up.
+    let mut hard_error = None;
+    let mut stalled = false;
+    for r in results {
+        match r {
+            Ok(SegResult::Failed(e)) => {
+                hard_error.get_or_insert(e);
+            }
+            Ok(SegResult::Stalled) => stalled = true,
+            Ok(_) => {}
+            Err(join) => {
+                hard_error.get_or_insert(format!("a download worker crashed: {join}"));
+            }
+        }
+    }
+    if hard_error.is_some() || stalled {
         save_meta(meta_path, total, &final_segs).await;
         if hide_part {
             fsattr::set_hidden(meta_path, true);
         }
-        return Outcome::Failed(err);
+        return match hard_error {
+            Some(err) => Outcome::Failed(err),
+            None => Outcome::Stalled,
+        };
     }
 
     // Every segment is full — drop the plan and promote the file.
@@ -177,6 +191,8 @@ enum SegResult {
     Done,
     /// Stopped on a pause/cancel signal or because a sibling aborted.
     Stopped,
+    /// Went quiet past the stall window — no data, but no hard error either.
+    Stalled,
     Failed(String),
 }
 
@@ -187,6 +203,8 @@ struct Worker {
     idx: usize,
     seg: Seg,
     total: u64,
+    /// Consecutive `POLL` stalls this worker tolerates before giving up.
+    stall_max: u32,
     shared: Arc<Mutex<Vec<Seg>>>,
     received: Arc<AtomicU64>,
     aborted: Arc<AtomicBool>,
@@ -227,9 +245,9 @@ impl Worker {
                 Ok(None) => break, // stream ended
                 Err(_) => {
                     stalls += 1;
-                    if stalls >= STALL_LIMIT {
+                    if stalls >= self.stall_max {
                         let _ = file.flush().await;
-                        return self.fail("connection stalled".to_string());
+                        return self.stall();
                     }
                     continue;
                 }
@@ -278,6 +296,13 @@ impl Worker {
     fn fail(&self, msg: String) -> SegResult {
         self.aborted.store(true, Ordering::Relaxed);
         SegResult::Failed(msg)
+    }
+
+    /// Wind the siblings down and report a stall — the connection went quiet
+    /// rather than erroring, so the whole download rests as stalled together.
+    fn stall(&self) -> SegResult {
+        self.aborted.store(true, Ordering::Relaxed);
+        SegResult::Stalled
     }
 }
 

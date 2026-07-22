@@ -29,6 +29,7 @@ pub async fn download(
     connections: usize,
     min_split: u64,
     hide_part: bool,
+    stall_timeout: Duration,
     control: &Control,
     progress: &ProgressFn,
 ) -> Outcome {
@@ -49,6 +50,7 @@ pub async fn download(
                 connections,
                 min_split,
                 hide_part,
+                stall_timeout,
                 control,
                 progress,
             )
@@ -78,6 +80,7 @@ pub async fn download(
                     connections,
                     min_split,
                     hide_part,
+                    stall_timeout,
                     control,
                     progress,
                 )
@@ -86,7 +89,17 @@ pub async fn download(
         }
     }
 
-    single_stream(client, url, part, dest, hide_part, control, progress).await
+    single_stream(
+        client,
+        url,
+        part,
+        dest,
+        hide_part,
+        stall_timeout,
+        control,
+        progress,
+    )
+    .await
 }
 
 /// What a server will let us do with a URL, learned from a tiny ranged request.
@@ -138,12 +151,14 @@ async fn existing_len(part: &str) -> u64 {
 
 /// Stream `url` into `part` over one connection, resuming from whatever is already
 /// there, then rename to `dest`.
+#[allow(clippy::too_many_arguments)]
 async fn single_stream(
     client: &Client,
     url: &str,
     part: &str,
     dest: &str,
     hide_part: bool,
+    stall_timeout: Duration,
     control: &Control,
     progress: &ProgressFn,
 ) -> Outcome {
@@ -196,9 +211,9 @@ async fn single_stream(
     progress(received, total);
 
     // How long to wait for a chunk before waking to re-check pause/cancel, and
-    // how many such stalls in a row mean the connection is dead.
+    // how many such stalls in a row mean the connection has gone quiet.
     const POLL: Duration = Duration::from_secs(2);
-    const STALL_LIMIT: u32 = 30; // ~60s with no data → give up
+    let stall_limit = stall_limit(stall_timeout, POLL);
 
     let mut stream = resp.bytes_stream();
     let mut stalls = 0u32;
@@ -222,9 +237,9 @@ async fn single_stream(
             Ok(None) => break, // stream finished
             Err(_) => {
                 stalls += 1;
-                if stalls >= STALL_LIMIT {
+                if stalls >= stall_limit {
                     let _ = file.flush().await;
-                    return Outcome::Failed("connection stalled".to_string());
+                    return Outcome::Stalled;
                 }
                 continue;
             }
@@ -299,6 +314,17 @@ fn parse_content_range_total(raw: &str) -> Option<u64> {
         None
     } else {
         total.parse().ok()
+    }
+}
+
+/// How many consecutive `poll`-length stalls add up to the stall window. A zero
+/// timeout means "never give up", so the limit is effectively unbounded.
+pub(super) fn stall_limit(stall_timeout: Duration, poll: Duration) -> u32 {
+    if stall_timeout.is_zero() {
+        u32::MAX
+    } else {
+        let polls = stall_timeout.as_millis() / poll.as_millis().max(1);
+        polls.clamp(1, u32::MAX as u128) as u32
     }
 }
 

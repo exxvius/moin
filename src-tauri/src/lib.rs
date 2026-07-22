@@ -86,6 +86,7 @@ pub fn run() {
             commands::update_category,
             commands::delete_category,
             commands::reorder_categories,
+            commands::move_to_category,
         ])
         .run(tauri::generate_context!())
         .expect("error while running moin");

@@ -11,11 +11,11 @@ use uuid::Uuid;
 
 use super::aria2::Aria2Backend;
 use super::backend::{
-    BackendInfo, Control, DownloadBackend, Outcome, ProgressFn, Signal, TransferOpts,
+    BackendInfo, Control, DownloadBackend, NetConfig, Outcome, ProgressFn, Signal, TransferOpts,
 };
 use super::category::{self, Candidate, Category};
 use super::embedded::EmbeddedBackend;
-use super::settings::Settings;
+use super::settings::{CategoryChangeBehavior, Settings};
 use super::store::Store;
 use super::task::{filename_from_url, now_ms, Task, TaskKind, TaskProgress, TaskStatus};
 use super::tool::{Aria2Tool, ToolStatus};
@@ -36,6 +36,54 @@ struct Entry {
     /// task is cancelling; once it stops (releasing its file handle) it gets
     /// dropped, and the completed file is deleted too when `true`.
     pending_archive: Option<bool>,
+    /// A category move requested while the task was still running: it's pausing,
+    /// and once it stops the move begins instead of leaving it paused.
+    pending_move: Option<PendingMove>,
+    /// True while the file is being relocated (status `Moving`). Guards the task
+    /// against pause/resume/cancel and defers a remove until the move finishes.
+    moving: bool,
+}
+
+/// A queued request to relocate a task's file into another category's folder.
+struct PendingMove {
+    /// The category to file the download under afterwards (`None` = uncategorized).
+    category: Option<String>,
+    /// The folder the file is moving into.
+    target_dir: PathBuf,
+}
+
+impl Entry {
+    /// A fresh entry for `task`, not yet running and with nothing pending.
+    fn idle(task: Task) -> Self {
+        Self {
+            task,
+            control: None,
+            pending_archive: None,
+            pending_move: None,
+            moving: false,
+        }
+    }
+}
+
+/// Everything the spawned relocation needs: the old and new paths for the file
+/// (and its `.part`/`.meta` siblings) plus what to do once the bytes have landed.
+struct MoveJob {
+    id: String,
+    /// The download was already finished, so its payload is the final file rather
+    /// than a `.part`; it returns to `Completed` afterwards instead of re-queuing.
+    was_completed: bool,
+    /// Category to file the download under once the move lands.
+    category: Option<String>,
+    new_dest: String,
+    new_filename: String,
+    old_dest: String,
+    old_part: String,
+    old_meta: String,
+    new_part: String,
+    new_meta: String,
+    /// Known total size, used for the progress bar when the file size can't be
+    /// read from disk.
+    total: Option<u64>,
 }
 
 struct Inner {
@@ -69,18 +117,17 @@ impl Engine {
         let mut tasks = HashMap::new();
         for mut task in store.all()? {
             // Anything that was mid-flight when we last quit comes back paused —
-            // never silently resume a download the user didn't ask to restart.
-            if task.status == TaskStatus::Connecting || task.status == TaskStatus::Downloading {
+            // never silently resume a download the user didn't ask to restart. A
+            // move interrupted by a quit is treated the same: the file is still at
+            // its recorded path (the dest only advances after the move lands), so
+            // resuming from where it sits is safe.
+            if matches!(
+                task.status,
+                TaskStatus::Connecting | TaskStatus::Downloading | TaskStatus::Moving
+            ) {
                 task.status = TaskStatus::Paused;
             }
-            tasks.insert(
-                task.id.clone(),
-                Entry {
-                    task,
-                    control: None,
-                    pending_archive: None,
-                },
-            );
+            tasks.insert(task.id.clone(), Entry::idle(task));
         }
 
         sweep_orphan_parts(tasks.values().map(|e| &e.task));
@@ -93,6 +140,12 @@ impl Engine {
             Arc::new(EmbeddedBackend::new()),
             Arc::new(Aria2Backend::new(tool.clone())),
         ];
+        // Apply the persisted network settings (e.g. connect timeout) to the
+        // backends' clients before anything runs.
+        let net = net_config(&settings);
+        for b in &backends {
+            b.reconfigure(net);
+        }
 
         Ok(Self {
             inner: Arc::new(Inner {
@@ -172,14 +225,7 @@ impl Engine {
                 backend: None,
                 category,
             };
-            tasks.insert(
-                task.id.clone(),
-                Entry {
-                    task: task.clone(),
-                    control: None,
-                    pending_archive: None,
-                },
-            );
+            tasks.insert(task.id.clone(), Entry::idle(task.clone()));
             task
         };
 
@@ -195,6 +241,9 @@ impl Engine {
             let Some(entry) = tasks.get_mut(id) else {
                 return;
             };
+            if entry.moving {
+                return; // mid-relocation; let the move finish first
+            }
             if let Some(control) = &entry.control {
                 // Running: ask it to stop; `finish` will mark it Paused.
                 control.set(Signal::Pause);
@@ -218,7 +267,10 @@ impl Engine {
             let Some(entry) = tasks.get_mut(id) else {
                 return;
             };
-            if entry.control.is_some() || entry.task.status == TaskStatus::Completed {
+            if entry.moving
+                || entry.control.is_some()
+                || entry.task.status == TaskStatus::Completed
+            {
                 return;
             }
             entry.task.status = TaskStatus::Queued;
@@ -236,6 +288,9 @@ impl Engine {
             let Some(entry) = tasks.get_mut(id) else {
                 return;
             };
+            if entry.moving {
+                return; // mid-relocation; let the move finish first
+            }
             if let Some(control) = &entry.control {
                 control.set(Signal::Cancel);
                 return; // `finish` handles the rest
@@ -269,6 +324,12 @@ impl Engine {
         let dest = {
             let mut tasks = self.inner.tasks.lock().unwrap();
             match tasks.get_mut(id) {
+                // Mid-relocation: there's no control to cancel, so just record the
+                // request; the move-finish handler archives once the file lands.
+                Some(entry) if entry.moving => {
+                    entry.pending_archive = Some(delete_file);
+                    return Ok(());
+                }
                 Some(entry) if entry.control.is_some() => {
                     entry.pending_archive = Some(delete_file);
                     if let Some(control) = &entry.control {
@@ -314,7 +375,7 @@ impl Engine {
             let Some(entry) = tasks.get_mut(id) else {
                 return;
             };
-            if entry.control.is_some() {
+            if entry.moving || entry.control.is_some() {
                 return;
             }
             entry.task.archived = false;
@@ -354,6 +415,11 @@ impl Engine {
         // Keep the aria2c resolver in step with the persisted override so both
         // save paths (general settings and the tool picker) agree.
         self.inner.tool.set_override(next.aria2_path.clone());
+        // Push network settings (connect timeout) to the backends' clients.
+        let net = net_config(&next);
+        for b in &self.inner.backends {
+            b.reconfigure(net);
+        }
         {
             let mut s = self.inner.settings.lock().unwrap();
             *s = next.clone();
@@ -484,6 +550,80 @@ impl Engine {
         }
         self.categories()
     }
+
+    /// Move one or more downloads to `category` (`None` = uncategorized). The
+    /// change-only behavior just re-tags them; move-file relocates each file into
+    /// the category's folder, showing a `Moving` status while it copies.
+    /// `default_dir` is the fallback folder for a category (or uncategorized) with
+    /// no save-folder of its own.
+    pub fn move_to_category(
+        &self,
+        ids: Vec<String>,
+        category: Option<String>,
+        default_dir: PathBuf,
+    ) {
+        // Validate the category id and resolve where its files live.
+        let (category, target_dir) = {
+            let cats = self.inner.categories.lock().unwrap();
+            match category.and_then(|id| cats.iter().find(|c| c.id == id)) {
+                Some(c) => {
+                    let dir = c.save_dir.clone().map(PathBuf::from).unwrap_or(default_dir);
+                    (Some(c.id.clone()), dir)
+                }
+                None => (None, default_dir),
+            }
+        };
+        let behavior = self.inner.settings.lock().unwrap().category_change;
+
+        for id in ids {
+            if behavior == CategoryChangeBehavior::ChangeOnly {
+                self.retag(&id, category.clone());
+                continue;
+            }
+            // Move-file: relocate into the category folder. A running download is
+            // paused first; the move begins when it stops (see `finish`).
+            let start_now = {
+                let mut tasks = self.inner.tasks.lock().unwrap();
+                let Some(entry) = tasks.get_mut(&id) else {
+                    continue;
+                };
+                if entry.moving {
+                    continue; // already relocating
+                }
+                match &entry.control {
+                    Some(control) => {
+                        entry.pending_move = Some(PendingMove {
+                            category: category.clone(),
+                            target_dir: target_dir.clone(),
+                        });
+                        control.set(Signal::Pause);
+                        false
+                    }
+                    None => true,
+                }
+            };
+            if start_now {
+                Inner::begin_move(self.inner.clone(), id, category.clone(), target_dir.clone());
+            }
+        }
+    }
+
+    /// Re-tag a download's category without touching its file (change-only mode).
+    fn retag(&self, id: &str, category: Option<String>) {
+        let task = {
+            let mut tasks = self.inner.tasks.lock().unwrap();
+            let Some(entry) = tasks.get_mut(id) else {
+                return;
+            };
+            if entry.task.category == category {
+                return;
+            }
+            entry.task.category = category;
+            entry.task.updated_at = now_ms();
+            entry.task.clone()
+        };
+        self.persist_emit(&task);
+    }
 }
 
 impl Inner {
@@ -587,6 +727,7 @@ impl Inner {
                 connections: s.connections,
                 min_split_size: s.min_split_size,
                 hide_part: s.hide_part_files,
+                stall_timeout: Duration::from_secs(s.stall_timeout_secs),
             }
         };
         let progress = Inner::make_progress(inner.clone(), id.clone());
@@ -690,20 +831,32 @@ impl Inner {
     }
 
     fn finish(inner: Arc<Inner>, id: String, outcome: Outcome) {
-        // If a remove/delete was requested mid-download, archive it now — the task
-        // has stopped and released its file handle.
-        let (task, archived) = {
+        // A remove/delete requested mid-download archives now; a category move
+        // requested mid-download begins now — either way the task has stopped and
+        // released its file handle. Otherwise settle on the transfer's outcome.
+        enum Post {
+            Archive(Task, bool),
+            Move(PendingMove),
+            Settle(Task),
+        }
+
+        let post = {
             let mut tasks = inner.tasks.lock().unwrap();
             let Some(entry) = tasks.get_mut(&id) else {
                 return;
             };
             entry.control = None;
             if let Some(delete_file) = entry.pending_archive.take() {
+                entry.pending_move = None; // a pending remove wins over a move
                 entry.task.archived = true;
                 entry.task.status = TaskStatus::Canceled;
                 entry.task.updated_at = now_ms();
-                (entry.task.clone(), Some(delete_file))
+                Post::Archive(entry.task.clone(), delete_file)
             } else {
+                // Settle on the real outcome first — even when a move is pending, so
+                // a transfer that finished the instant we asked it to pause is
+                // recorded as Completed and gets its finished file relocated (not a
+                // phantom `.part`).
                 match outcome {
                     Outcome::Completed => {
                         entry.task.status = TaskStatus::Completed;
@@ -715,9 +868,211 @@ impl Inner {
                     }
                     Outcome::Paused => entry.task.status = TaskStatus::Paused,
                     Outcome::Canceled => entry.task.status = TaskStatus::Canceled,
+                    Outcome::Stalled => {
+                        // Not an error — the partial is kept and it can resume.
+                        entry.task.status = TaskStatus::Stalled;
+                        entry.task.error = None;
+                    }
                     Outcome::Failed(msg) => {
                         entry.task.status = TaskStatus::Failed;
                         entry.task.error = Some(msg);
+                    }
+                }
+                entry.task.updated_at = now_ms();
+                match entry.pending_move.take() {
+                    // `begin_move` re-reads the just-settled status and flips it to
+                    // Moving.
+                    Some(pm) => Post::Move(pm),
+                    None => Post::Settle(entry.task.clone()),
+                }
+            }
+        };
+
+        match post {
+            Post::Archive(task, delete_file) => {
+                purge_files(&task, delete_file);
+                let _ = inner.store.lock().unwrap().upsert(&task);
+                inner.emitter.updated(&task);
+                Inner::pump(inner);
+            }
+            Post::Move(pm) => {
+                Inner::begin_move(inner, id, pm.category, pm.target_dir);
+            }
+            Post::Settle(task) => {
+                if task.status == TaskStatus::Canceled {
+                    cleanup_partial(&task);
+                }
+                let _ = inner.store.lock().unwrap().upsert(&task);
+                inner.emitter.updated(&task);
+                Inner::pump(inner);
+            }
+        }
+    }
+
+    /// Kick off a relocation into `target_dir`, filing the download under
+    /// `category` once it lands. If the file is already in `target_dir` this is
+    /// just a re-tag; otherwise the task flips to `Moving` and a background task
+    /// copies the bytes, reporting progress, then `finish_move` settles it.
+    fn begin_move(
+        inner: Arc<Inner>,
+        id: String,
+        category: Option<String>,
+        target_dir: PathBuf,
+    ) {
+        // The category folder may not exist yet — surface a failure to create it
+        // on the task and leave the file where it is.
+        if let Err(e) = std::fs::create_dir_all(&target_dir) {
+            let task = {
+                let mut tasks = inner.tasks.lock().unwrap();
+                let Some(entry) = tasks.get_mut(&id) else {
+                    return;
+                };
+                entry.task.error = Some(format!("couldn't create the category folder: {e}"));
+                entry.task.updated_at = now_ms();
+                entry.task.clone()
+            };
+            let _ = inner.store.lock().unwrap().upsert(&task);
+            inner.emitter.updated(&task);
+            return;
+        }
+
+        enum Plan {
+            Nothing,
+            Retag(Task),
+            Move(Box<MoveJob>, Task),
+        }
+
+        let plan = {
+            let mut tasks = inner.tasks.lock().unwrap();
+            if !tasks.contains_key(&id) {
+                Plan::Nothing
+            } else {
+                // Destinations already claimed by other tasks, so the move can't
+                // land on top of one.
+                let taken: HashSet<String> = tasks
+                    .values()
+                    .filter(|e| e.task.id != id)
+                    .map(|e| e.task.dest.clone())
+                    .collect();
+                let entry = tasks.get_mut(&id).unwrap();
+                if entry.moving || entry.control.is_some() {
+                    Plan::Nothing
+                } else if Path::new(&entry.task.dest).parent() == Some(target_dir.as_path()) {
+                    // Same folder — nothing to move, just re-tag.
+                    entry.task.category = category;
+                    entry.task.updated_at = now_ms();
+                    Plan::Retag(entry.task.clone())
+                } else {
+                    let old_dest = entry.task.dest.clone();
+                    let new_filename = unique_filename(&target_dir, &entry.task.filename, &taken);
+                    let new_dest = target_dir
+                        .join(&new_filename)
+                        .to_string_lossy()
+                        .into_owned();
+                    let was_completed = entry.task.status == TaskStatus::Completed;
+                    let total = entry.task.total;
+
+                    entry.moving = true;
+                    entry.task.status = TaskStatus::Moving;
+                    entry.task.error = None;
+                    entry.task.updated_at = now_ms();
+
+                    let job = MoveJob {
+                        id: id.clone(),
+                        was_completed,
+                        category,
+                        old_part: format!("{old_dest}.part"),
+                        old_meta: format!("{old_dest}.part.meta"),
+                        old_dest,
+                        new_part: format!("{new_dest}.part"),
+                        new_meta: format!("{new_dest}.part.meta"),
+                        new_dest,
+                        new_filename,
+                        total,
+                    };
+                    Plan::Move(Box::new(job), entry.task.clone())
+                }
+            }
+        };
+
+        match plan {
+            Plan::Nothing => {}
+            Plan::Retag(task) => {
+                let _ = inner.store.lock().unwrap().upsert(&task);
+                inner.emitter.updated(&task);
+            }
+            Plan::Move(job, task) => {
+                let _ = inner.store.lock().unwrap().upsert(&task);
+                inner.emitter.updated(&task);
+                // Seed the bar at a determinate 0% right away: the wait before bytes
+                // start moving (a rename settling, a handle releasing) then reads as
+                // "starting" instead of an indeterminate slide.
+                let payload = if job.was_completed {
+                    &job.old_dest
+                } else {
+                    &job.old_part
+                };
+                let start_total = std::fs::metadata(payload)
+                    .ok()
+                    .map(|m| m.len())
+                    .or(job.total);
+                emit_move(&inner, &job.id, 0, start_total);
+                tokio::spawn(async move {
+                    let result = run_move(&inner, &job).await;
+                    Inner::finish_move(inner, *job, result);
+                });
+            }
+        }
+    }
+
+    /// Settle a finished relocation: on success the task now points at the new
+    /// path under the new category and either returns to `Completed` or re-queues
+    /// to resume; on failure it falls back to a resumable state with the reason. A
+    /// remove requested mid-move is honored here.
+    fn finish_move(inner: Arc<Inner>, job: MoveJob, result: Result<(), String>) {
+        let mut resume = false;
+        let (task, archive) = {
+            let mut tasks = inner.tasks.lock().unwrap();
+            let Some(entry) = tasks.get_mut(&job.id) else {
+                return;
+            };
+            entry.moving = false;
+
+            // On success the bytes now live at the new path under the new category.
+            if result.is_ok() {
+                entry.task.dest = job.new_dest.clone();
+                entry.task.filename = job.new_filename.clone();
+                entry.task.category = job.category.clone();
+            }
+
+            if let Some(delete_file) = entry.pending_archive.take() {
+                entry.task.archived = true;
+                entry.task.status = if job.was_completed {
+                    TaskStatus::Completed
+                } else {
+                    TaskStatus::Canceled
+                };
+                entry.task.updated_at = now_ms();
+                (entry.task.clone(), Some(delete_file))
+            } else {
+                match &result {
+                    Ok(()) => {
+                        entry.task.error = None;
+                        if job.was_completed {
+                            entry.task.status = TaskStatus::Completed;
+                        } else {
+                            entry.task.status = TaskStatus::Queued;
+                            resume = true;
+                        }
+                    }
+                    Err(msg) => {
+                        // The file never moved; fall back to where it was.
+                        entry.task.status = if job.was_completed {
+                            TaskStatus::Completed
+                        } else {
+                            TaskStatus::Paused
+                        };
+                        entry.task.error = Some(msg.clone());
                     }
                 }
                 entry.task.updated_at = now_ms();
@@ -725,14 +1080,14 @@ impl Inner {
             }
         };
 
-        if let Some(delete_file) = archived {
+        if let Some(delete_file) = archive {
             purge_files(&task, delete_file);
-        } else if task.status == TaskStatus::Canceled {
-            cleanup_partial(&task);
         }
         let _ = inner.store.lock().unwrap().upsert(&task);
         inner.emitter.updated(&task);
-        Inner::pump(inner);
+        if resume {
+            Inner::pump(inner);
+        }
     }
 }
 
@@ -806,6 +1161,184 @@ fn purge_files(task: &Task, delete_file: bool) {
 fn cleanup_partial(task: &Task) {
     cleanup_file(task.part_path());
     cleanup_file(task.meta_path());
+}
+
+/// Relocate a task's files to their new home. The tiny resume sidecar moves
+/// silently; the payload (the finished file, or the in-progress `.part`) moves
+/// with progress so the UI's bar tracks the copy. A missing file is skipped.
+async fn run_move(inner: &Arc<Inner>, job: &MoveJob) -> Result<(), String> {
+    move_file(&job.old_meta, &job.new_meta)
+        .await
+        .map_err(|e| format!("couldn't move the resume data: {e}"))?;
+
+    let (src, dst) = if job.was_completed {
+        (&job.old_dest, &job.new_dest)
+    } else {
+        (&job.old_part, &job.new_part)
+    };
+    move_payload(inner, &job.id, src, dst, job.total).await
+}
+
+/// Move the main payload, reporting `Moving` progress as it goes. A same-volume
+/// rename is instant (the bar jumps to full); a cross-volume move streams the
+/// bytes so the bar fills as it copies. A missing source is treated as done.
+async fn move_payload(
+    inner: &Arc<Inner>,
+    id: &str,
+    src: &str,
+    dst: &str,
+    hint_total: Option<u64>,
+) -> Result<(), String> {
+    let size = tokio::fs::metadata(src).await.ok().map(|m| m.len());
+    if size.is_none() {
+        return Ok(()); // nothing on disk to move (e.g. a never-started task)
+    }
+    let total = size.or(hint_total);
+
+    match rename_retry(src, dst).await {
+        Ok(()) => {
+            emit_move(inner, id, total.unwrap_or(0), total);
+            Ok(())
+        }
+        // Cross-volume (or a rename the OS refused): stream the bytes across.
+        Err(_) => {
+            let inner2 = inner.clone();
+            let id2 = id.to_string();
+            copy_across(src, dst, move |moved, total| {
+                emit_move(&inner2, &id2, moved, Some(total));
+            })
+            .await
+            .map_err(|e| format!("couldn't move the file: {e}"))
+        }
+    }
+}
+
+/// Move `src` onto `dst` when `src` exists (a missing source is a no-op), trying
+/// a fast rename before falling back to a cross-volume copy.
+async fn move_file(src: &str, dst: &str) -> std::io::Result<()> {
+    if tokio::fs::metadata(src).await.is_err() {
+        return Ok(());
+    }
+    match rename_retry(src, dst).await {
+        Ok(()) => Ok(()),
+        Err(_) => copy_across(src, dst, |_, _| {}).await,
+    }
+}
+
+/// Rename `src` to `dst`, retrying briefly: a file handle the OS just released can
+/// linger for a moment on Windows, so a rename right after a pause can fail once.
+/// A cross-device error can't be retried away, so it returns straight to the
+/// caller's copy fallback.
+async fn rename_retry(src: &str, dst: &str) -> std::io::Result<()> {
+    let mut last: Option<std::io::Error> = None;
+    for attempt in 0u32..5 {
+        match tokio::fs::rename(src, dst).await {
+            Ok(()) => return Ok(()),
+            Err(e) if is_cross_device(&e) => return Err(e),
+            Err(e) => {
+                last = Some(e);
+                tokio::time::sleep(Duration::from_millis(60 * u64::from(attempt) + 40)).await;
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("rename failed")))
+}
+
+/// Stream `src` to `dst` then remove the original, calling `on_progress(moved,
+/// total)` as it copies — the cross-volume path where a rename won't do.
+async fn copy_across(
+    src: &str,
+    dst: &str,
+    on_progress: impl Fn(u64, u64),
+) -> std::io::Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut reader = open_retry(src).await?;
+    let total = reader.metadata().await.map(|m| m.len()).unwrap_or(0);
+    let mut writer = tokio::fs::File::create(dst).await?;
+    let mut buf = vec![0u8; 1 << 20];
+    let mut moved = 0u64;
+    let mut last = Instant::now();
+    loop {
+        let n = reader.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        writer.write_all(&buf[..n]).await?;
+        moved += n as u64;
+        if last.elapsed() >= Duration::from_millis(120) {
+            on_progress(moved, total);
+            last = Instant::now();
+        }
+    }
+    writer.flush().await?;
+    drop(writer);
+    drop(reader);
+    remove_retry(src).await?;
+    on_progress(total, total);
+    Ok(())
+}
+
+/// Open `path` for reading, retrying through the brief post-pause handle lag.
+async fn open_retry(path: &str) -> std::io::Result<tokio::fs::File> {
+    let mut last: Option<std::io::Error> = None;
+    for attempt in 0u32..5 {
+        match tokio::fs::File::open(path).await {
+            Ok(f) => return Ok(f),
+            Err(e) => {
+                last = Some(e);
+                tokio::time::sleep(Duration::from_millis(60 * u64::from(attempt) + 40)).await;
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("open failed")))
+}
+
+/// Remove `path`, retrying the same way (and treating "already gone" as success).
+async fn remove_retry(path: &str) -> std::io::Result<()> {
+    for attempt in 0u32..5 {
+        match tokio::fs::remove_file(path).await {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) if attempt == 4 => return Err(e),
+            Err(_) => {
+                tokio::time::sleep(Duration::from_millis(60 * u64::from(attempt) + 40)).await;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether a rename failed because source and destination are on different
+/// volumes — the one error a retry can't fix, so the caller copies instead.
+fn is_cross_device(e: &std::io::Error) -> bool {
+    #[cfg(windows)]
+    {
+        e.raw_os_error() == Some(17) // ERROR_NOT_SAME_DEVICE
+    }
+    #[cfg(not(windows))]
+    {
+        e.raw_os_error() == Some(18) // EXDEV
+    }
+}
+
+/// The network config the backends' clients should use, drawn from settings.
+fn net_config(s: &Settings) -> NetConfig {
+    NetConfig {
+        connect_timeout: (s.connect_timeout_secs > 0)
+            .then(|| Duration::from_secs(s.connect_timeout_secs)),
+    }
+}
+
+/// Emit a `Moving` progress tick so the card's bar tracks the relocation.
+fn emit_move(inner: &Arc<Inner>, id: &str, moved: u64, total: Option<u64>) {
+    inner.emitter.progress(&TaskProgress {
+        id: id.to_string(),
+        received: moved,
+        total,
+        speed: 0,
+        status: TaskStatus::Moving,
+    });
 }
 
 /// Pick a filename that doesn't collide in `dir`, adding " (n)" before the

@@ -136,16 +136,15 @@ export function CategoriesView() {
 
   return (
     <div className="view categories">
-      <div className="view-head">
-        <h2>Categories</h2>
-        <p>
-          File downloads into buckets by rule. A download joins a category when
-          all of its triggers match; when several match, the one higher in this
-          list wins.
-        </p>
-      </div>
-
-      <div className="cat-toolbar">
+      <div className="view-head cat-head">
+        <div>
+          <h2>Categories</h2>
+          <p>
+            File downloads into buckets by rule. A download joins a category when
+            all of its triggers match; when several match, the one higher in this
+            list wins.
+          </p>
+        </div>
         <button
           className="btn-primary"
           onClick={() => setEditing(blankCategory())}

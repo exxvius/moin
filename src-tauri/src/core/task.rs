@@ -21,6 +21,15 @@ pub enum TaskKind {
 ///                       Completed    (resume)
 ///                        Failed / Canceled
 /// ```
+///
+/// `Moving` is a transient side-state: the file is being relocated to a new
+/// category's folder. When the move finishes the task returns to `Completed` (if
+/// it was already done) or re-queues to resume.
+///
+/// `Stalled` means data stopped arriving past the stall window — the connection
+/// went quiet without an outright error. The partial is kept; for HTTP it waits
+/// for a manual retry, while a torrent can slip back into `Downloading` on its
+/// own once a peer delivers data again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskStatus {
@@ -28,8 +37,10 @@ pub enum TaskStatus {
     Connecting,
     Downloading,
     Paused,
+    Moving,
     Completed,
     Failed,
+    Stalled,
     Canceled,
 }
 

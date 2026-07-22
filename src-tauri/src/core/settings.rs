@@ -13,6 +13,21 @@ const DEFAULT_CONNECTIONS: usize = 8;
 /// stream; above it, pieces never split smaller than this. 1 MiB matches aria2's
 /// minimum for `--min-split-size`, so the same value drives both engines.
 const DEFAULT_MIN_SPLIT_SIZE: u64 = 1 << 20; // 1 MiB
+/// Seconds of no incoming data before a transfer is marked stalled. 0 = never.
+const DEFAULT_STALL_TIMEOUT: u64 = 60;
+/// Seconds to wait for a connection to be established. 0 = OS default.
+const DEFAULT_CONNECT_TIMEOUT: u64 = 30;
+
+/// What happens to a download's file when it's moved to a different category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum CategoryChangeBehavior {
+    /// Only re-tag the download; the file stays where it is.
+    #[default]
+    ChangeOnly,
+    /// Re-tag and relocate the file into the new category's folder.
+    MoveFile,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -37,6 +52,17 @@ pub struct Settings {
     /// the download completes.
     #[serde(default)]
     pub hide_part_files: bool,
+    /// What moving a download to another category does to its file: just re-tag,
+    /// or relocate the file into the new category's folder.
+    #[serde(default)]
+    pub category_change: CategoryChangeBehavior,
+    /// Seconds a transfer may go without receiving data before it's marked
+    /// stalled. 0 means never — wait indefinitely for data to resume.
+    #[serde(default = "default_stall_timeout")]
+    pub stall_timeout_secs: u64,
+    /// Seconds to wait while establishing a connection. 0 means the OS default.
+    #[serde(default = "default_connect_timeout")]
+    pub connect_timeout_secs: u64,
     /// Default destination folder; `None` means the OS Downloads folder.
     pub download_dir: Option<String>,
     /// Explicit path to a user-supplied aria2c binary (the "bring your own"
@@ -54,6 +80,14 @@ fn default_min_split_size() -> u64 {
     DEFAULT_MIN_SPLIT_SIZE
 }
 
+fn default_stall_timeout() -> u64 {
+    DEFAULT_STALL_TIMEOUT
+}
+
+fn default_connect_timeout() -> u64 {
+    DEFAULT_CONNECT_TIMEOUT
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -63,6 +97,9 @@ impl Default for Settings {
             connections: DEFAULT_CONNECTIONS,
             min_split_size: DEFAULT_MIN_SPLIT_SIZE,
             hide_part_files: false,
+            category_change: CategoryChangeBehavior::default(),
+            stall_timeout_secs: DEFAULT_STALL_TIMEOUT,
+            connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT,
             download_dir: None,
             aria2_path: None,
         }

@@ -16,11 +16,19 @@ import { api } from "./api";
 import { subscribeTasks } from "./events";
 import type { Category, Task, TaskProgress } from "./types";
 
+/** How far along a file relocation is, while a task is in the Moving state. */
+export interface MoveProgress {
+  moved: number;
+  total: number | null;
+}
+
 interface State {
   /** Tasks by id. */
   tasks: Record<string, Task>;
   /** Live speed (bytes/sec) by id, only while downloading. */
   speeds: Record<string, number>;
+  /** Relocation progress by id, only while the task is Moving. */
+  moves: Record<string, MoveProgress>;
 }
 
 type Action =
@@ -30,14 +38,14 @@ type Action =
   | { type: "PROGRESS"; p: TaskProgress }
   | { type: "REMOVED"; id: string };
 
-const initial: State = { tasks: {}, speeds: {} };
+const initial: State = { tasks: {}, speeds: {}, moves: {} };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case "LOAD": {
       const tasks: Record<string, Task> = {};
       for (const t of action.tasks) tasks[t.id] = t;
-      return { tasks, speeds: {} };
+      return { tasks, speeds: {}, moves: {} };
     }
     case "ADDED":
     case "UPDATED": {
@@ -45,11 +53,30 @@ function reducer(state: State, action: Action): State {
       const speeds = { ...state.speeds };
       // A task that isn't actively downloading has no live speed.
       if (task.status !== "downloading") delete speeds[task.id];
-      return { ...state, tasks: { ...state.tasks, [task.id]: task }, speeds };
+      // Relocation progress only lives while the task is Moving.
+      const moves = { ...state.moves };
+      if (task.status !== "moving") delete moves[task.id];
+      return {
+        ...state,
+        tasks: { ...state.tasks, [task.id]: task },
+        speeds,
+        moves,
+      };
     }
     case "PROGRESS": {
       const prev = state.tasks[action.p.id];
       if (!prev) return state;
+      // A Moving tick reports relocation bytes, not download bytes — keep it out
+      // of the task's own received/total so the download progress is preserved.
+      if (action.p.status === "moving") {
+        return {
+          ...state,
+          moves: {
+            ...state.moves,
+            [action.p.id]: { moved: action.p.received, total: action.p.total },
+          },
+        };
+      }
       const next: Task = {
         ...prev,
         received: action.p.received,
@@ -57,6 +84,7 @@ function reducer(state: State, action: Action): State {
         status: action.p.status,
       };
       return {
+        ...state,
         tasks: { ...state.tasks, [next.id]: next },
         speeds: { ...state.speeds, [next.id]: action.p.speed },
       };
@@ -64,9 +92,11 @@ function reducer(state: State, action: Action): State {
     case "REMOVED": {
       const tasks = { ...state.tasks };
       const speeds = { ...state.speeds };
+      const moves = { ...state.moves };
       delete tasks[action.id];
       delete speeds[action.id];
-      return { tasks, speeds };
+      delete moves[action.id];
+      return { tasks, speeds, moves };
     }
     default:
       return state;
@@ -78,6 +108,7 @@ const ACTIVE: Task["status"][] = [
   "connecting",
   "downloading",
   "paused",
+  "moving",
 ];
 
 interface StoreValue {
@@ -88,6 +119,8 @@ interface StoreValue {
   /** Newest first, finished (completed/failed/canceled). */
   finished: Task[];
   speeds: Record<string, number>;
+  /** Relocation progress by id, only while a task is Moving. */
+  moves: Record<string, MoveProgress>;
   /** Categories in priority order. */
   categories: Category[];
   /** Replace the category list (accepts a value or an updater fn). */
@@ -100,6 +133,8 @@ interface StoreValue {
   delete: (id: string) => Promise<void>;
   retry: (id: string) => Promise<void>;
   forget: (id: string) => Promise<void>;
+  /** Move downloads to a category (null = uncategorized). */
+  moveToCategory: (ids: string[], category: string | null) => Promise<void>;
 }
 
 const StoreContext = createContext<StoreValue | null>(null);
@@ -143,6 +178,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       active: all.filter((t) => ACTIVE.includes(t.status)),
       finished: all.filter((t) => !ACTIVE.includes(t.status)),
       speeds: state.speeds,
+      moves: state.moves,
       categories,
       setCategories,
       add: async (url, category) => {
@@ -155,6 +191,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       delete: (id) => api.deleteDownload(id),
       retry: (id) => api.retryDownload(id),
       forget: (id) => api.forgetDownload(id),
+      moveToCategory: (ids, category) => api.moveToCategory(ids, category),
     };
   }, [state, categories]);
 

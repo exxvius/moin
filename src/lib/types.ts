@@ -8,8 +8,10 @@ export type TaskStatus =
   | "connecting"
   | "downloading"
   | "paused"
+  | "moving"
   | "completed"
   | "failed"
+  | "stalled"
   | "canceled";
 
 export interface Task {
@@ -44,6 +46,9 @@ export interface TaskProgress {
   status: TaskStatus;
 }
 
+/** What moving a download to another category does to its file. */
+export type CategoryChangeBehavior = "change-only" | "move-file";
+
 export interface Settings {
   http_backend: string;
   torrent_backend: string;
@@ -54,6 +59,12 @@ export interface Settings {
   min_split_size: number;
   /** Hide the in-progress .part files while downloading (Windows). */
   hide_part_files: boolean;
+  /** Whether moving a download to a category also relocates its file. */
+  category_change: CategoryChangeBehavior;
+  /** Seconds of no data before a transfer is marked stalled. 0 = never. */
+  stall_timeout_secs: number;
+  /** Seconds to wait to establish a connection. 0 = OS default. */
+  connect_timeout_secs: number;
   download_dir: string | null;
   /** Explicit path to a user-supplied aria2c binary, else null. */
   aria2_path: string | null;

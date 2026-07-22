@@ -33,4 +33,6 @@ export const api = {
   deleteCategory: (id: string) => invoke<Category[]>("delete_category", { id }),
   reorderCategories: (ids: string[]) =>
     invoke<Category[]>("reorder_categories", { ids }),
+  moveToCategory: (ids: string[], category: string | null) =>
+    invoke<void>("move_to_category", { ids, category }),
 };
