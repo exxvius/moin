@@ -138,6 +138,29 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Sanitize a caller-supplied filename (e.g. one a browser capture passed along)
+/// to a safe basename: directory components dropped, path separators and
+/// characters illegal on Windows removed, trailing dots/spaces trimmed. Returns
+/// `None` when nothing usable is left, so callers fall back to the URL-derived
+/// name.
+pub fn sanitize_filename(name: &str) -> Option<String> {
+    // Keep only the last path component, however it was separated.
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let cleaned: String = base
+        .chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+        })
+        .collect();
+    let trimmed = cleaned.trim().trim_end_matches(['.', ' ']);
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 /// Best-effort filename from a URL: the last non-empty path segment, percent
 /// left as-is, query/fragment stripped. Falls back to "download".
 pub fn filename_from_url(url: &str) -> String {
@@ -156,7 +179,31 @@ pub fn filename_from_url(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::filename_from_url;
+    use super::{filename_from_url, sanitize_filename};
+
+    #[test]
+    fn sanitize_filename_keeps_a_plain_name() {
+        assert_eq!(sanitize_filename("movie.mkv").as_deref(), Some("movie.mkv"));
+    }
+
+    #[test]
+    fn sanitize_filename_strips_path_and_illegal_chars() {
+        assert_eq!(
+            sanitize_filename("../../etc/pa:ss?wd.txt").as_deref(),
+            Some("passwd.txt")
+        );
+        assert_eq!(
+            sanitize_filename("C:\\Users\\x\\a<b>.zip").as_deref(),
+            Some("ab.zip")
+        );
+    }
+
+    #[test]
+    fn sanitize_filename_rejects_empty_or_dots() {
+        assert_eq!(sanitize_filename("   "), None);
+        assert_eq!(sanitize_filename("///"), None);
+        assert_eq!(sanitize_filename("....").as_deref(), None);
+    }
 
     #[test]
     fn filename_from_url_takes_last_segment() {

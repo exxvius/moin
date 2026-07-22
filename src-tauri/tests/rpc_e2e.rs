@@ -162,7 +162,7 @@ fn capture_with_cookie_downloads_the_file() {
     let (status, body) = post_add(
         &base,
         Some(&token),
-        json!({ "url": url, "headers": { "Cookie": COOKIE } }),
+        json!({ "url": url, "filename": "renamed.bin", "headers": { "Cookie": COOKIE } }),
     );
     assert_eq!(status, 200, "add should succeed: {body}");
 
@@ -172,6 +172,8 @@ fn capture_with_cookie_downloads_the_file() {
     let bytes = std::fs::read(&done.dest).unwrap();
     assert_eq!(bytes, PAYLOAD, "downloaded bytes should match what the origin served");
     assert!(done.dest.starts_with(download_dir.to_str().unwrap()));
+    // The captured filename overrides the URL-derived one.
+    assert_eq!(done.filename, "renamed.bin", "should use the passed filename");
 }
 
 #[test]

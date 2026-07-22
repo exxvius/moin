@@ -53,11 +53,12 @@ pub async fn add_download(
     url: String,
     category: Option<String>,
     headers: Option<std::collections::BTreeMap<String, String>>,
+    filename: Option<String>,
 ) -> Result<Task, String> {
     let dir = download_dir(&app, &state);
     state
         .engine
-        .add_http(url, dir, category, headers.unwrap_or_default())
+        .add_http(url, dir, category, headers.unwrap_or_default(), filename)
 }
 
 #[tauri::command]

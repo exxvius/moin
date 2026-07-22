@@ -69,8 +69,16 @@
       // Take over before the browser starts the download.
       event.preventDefault();
       event.stopImmediatePropagation();
+      // A `download="name"` attribute is the name the browser would have used.
+      const dl = anchor.getAttribute("download");
+      const filename = dl && dl.trim() ? dl.trim() : undefined;
       B.runtime
-        .sendMessage({ type: "moin-capture-link", url: anchor.href, referrer: location.href })
+        .sendMessage({
+          type: "moin-capture-link",
+          url: anchor.href,
+          referrer: location.href,
+          filename,
+        })
         .catch(() => {});
     },
     true, // capture phase, so we win before the page's own handlers

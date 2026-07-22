@@ -63,8 +63,8 @@ B.contextMenus.onClicked.addListener((info, tab) => {
 // so nothing is lost. Used by the context menu, the content-script link
 // interceptor, and (Firefox) the response interceptor — none of which have a
 // paused browser download to resume, so each re-issues one on fallback.
-async function captureAndFallback(url, referrer, tabId) {
-  const outcome = await capture({ url, referrer, tabId });
+async function captureAndFallback(url, referrer, tabId, filename) {
+  const outcome = await capture({ url, referrer, tabId, filename });
   if (outcome === "handed") return;
   bypass.add(url);
   B.downloads.download({ url }).catch(() => bypass.delete(url));
@@ -74,7 +74,7 @@ async function captureAndFallback(url, referrer, tabId) {
 // before the browser ever requests it — no save dialog.
 B.runtime.onMessage.addListener((msg, sender) => {
   if (msg?.type === "moin-capture-link" && isHandoffable(msg.url)) {
-    captureAndFallback(msg.url, sender?.tab?.url || msg.referrer, sender?.tab?.id);
+    captureAndFallback(msg.url, sender?.tab?.url || msg.referrer, sender?.tab?.id, msg.filename);
   }
 });
 
@@ -107,8 +107,10 @@ function onHeadersReceived(details) {
   );
   if (!disposition || !/attachment/i.test(disposition.value || "")) return {};
 
-  // It's a download — take it and cancel the browser's copy.
-  captureAndFallback(details.url, details.documentUrl || details.originUrl, details.tabId);
+  // It's a download — take it and cancel the browser's copy, carrying the
+  // Content-Disposition filename along.
+  const name = contentDispositionName(disposition.value);
+  captureAndFallback(details.url, details.documentUrl || details.originUrl, details.tabId, name);
   return { cancel: true };
 }
 
@@ -134,6 +136,8 @@ B.downloads.onCreated.addListener(async (item) => {
   const outcome = await capture({
     url: item.url,
     referrer: item.referrer,
+    // The browser's chosen path is a nicer name than the URL's tail.
+    filename: basename(item.filename),
   });
 
   if (outcome === "handed") {
@@ -153,7 +157,7 @@ B.downloads.onCreated.addListener(async (item) => {
  *   "declined" — moin was down and the user chose not to launch it
  *   "failed"   — an error the user was notified about
  */
-async function capture({ url, referrer, tabId }) {
+async function capture({ url, referrer, tabId, filename }) {
   const cfg = await loadConfig();
   if (!cfg.token) {
     notify("moin isn't set up", "Open the extension's options and paste moin's access token.");
@@ -171,8 +175,8 @@ async function capture({ url, referrer, tabId }) {
   }
 
   try {
-    await sendToMoin(cfg, { url, referrer });
-    notify("Sent to moin", filenameFromUrl(url));
+    await sendToMoin(cfg, { url, referrer, filename });
+    notify("Sent to moin", filename || filenameFromUrl(url));
     return "handed";
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

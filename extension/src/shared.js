@@ -71,12 +71,17 @@ async function verifyMoin(cfg) {
 }
 
 /** Hand a download to moin. Throws on a non-OK reply so callers can react. */
-async function sendToMoin(cfg, { url, referrer }) {
+async function sendToMoin(cfg, { url, referrer, filename }) {
   const headers = {};
   const cookie = await cookieHeader(url);
   if (cookie) headers["Cookie"] = cookie;
   if (referrer) headers["Referer"] = referrer;
   headers["User-Agent"] = navigator.userAgent;
+
+  const body = { url, headers };
+  // Pass the name the browser would have used, when we know a better one than the
+  // URL's last segment; moin sanitizes it and files the download under it.
+  if (filename) body.filename = filename;
 
   const res = await fetch(`${moinBase(cfg)}/add`, {
     method: "POST",
@@ -84,7 +89,7 @@ async function sendToMoin(cfg, { url, referrer }) {
       "Content-Type": "application/json",
       Authorization: `Bearer ${cfg.token}`,
     },
-    body: JSON.stringify({ url, headers }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
@@ -119,4 +124,27 @@ async function fetchWithTimeout(url, options, ms) {
  *  blob:/data:/filesystem URLs, which only exist inside that browser. */
 function isHandoffable(url) {
   return typeof url === "string" && /^https?:\/\//i.test(url);
+}
+
+/** The filename from a Content-Disposition header value, or null. Handles the
+ *  RFC 5987 `filename*=UTF-8''…` form and the plain quoted/unquoted `filename=`. */
+function contentDispositionName(value) {
+  if (!value) return null;
+  const star = /filename\*=\s*(?:UTF-8|utf-8)''([^;]+)/i.exec(value);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1].trim());
+    } catch {
+      // Malformed encoding — fall through to the plain form.
+    }
+  }
+  const plain = /filename=\s*"?([^";]+)"?/i.exec(value);
+  return plain ? plain[1].trim() : null;
+}
+
+/** Last path segment of a filesystem path (handles / and \), or null. */
+function basename(path) {
+  if (!path) return null;
+  const seg = path.split(/[\\/]/).pop();
+  return seg && seg.trim() ? seg.trim() : null;
 }

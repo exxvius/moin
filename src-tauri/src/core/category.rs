@@ -92,7 +92,18 @@ impl Candidate {
     /// Build a candidate from just a URL and how it was added — everything the
     /// manual-add path knows before anything is downloaded.
     pub fn from_url(url: &str, add_method: AddMethodKind) -> Self {
-        let filename = filename_from_url(url);
+        Self::from_url_named(url, add_method, None)
+    }
+
+    /// Like [`from_url`] but with a filename the caller already knows (e.g. a
+    /// browser capture's `download` attribute or a `Content-Disposition`), which
+    /// then drives the name/extension triggers; falls back to the URL otherwise.
+    pub fn from_url_named(url: &str, add_method: AddMethodKind, filename: Option<&str>) -> Self {
+        let filename = filename
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| filename_from_url(url));
         let extension = extension_of(&filename);
         Self {
             url: url.to_string(),

@@ -17,7 +17,9 @@ use super::category::{self, Candidate, Category};
 use super::embedded::EmbeddedBackend;
 use super::settings::{CategoryChangeBehavior, Settings};
 use super::store::Store;
-use super::task::{filename_from_url, now_ms, Task, TaskKind, TaskProgress, TaskStatus};
+use super::task::{
+    filename_from_url, now_ms, sanitize_filename, Task, TaskKind, TaskProgress, TaskStatus,
+};
 use super::tool::{Aria2Tool, ToolStatus};
 
 /// How the engine reports changes to the outside world (the UI, via Tauri).
@@ -184,6 +186,7 @@ impl Engine {
         dir: PathBuf,
         category: Option<String>,
         headers: BTreeMap<String, String>,
+        filename: Option<String>,
     ) -> Result<Task, String> {
         let url = url.trim().to_string();
         if url.is_empty() {
@@ -204,7 +207,12 @@ impl Engine {
         };
 
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let base = filename_from_url(&url);
+        // A caller-supplied name (e.g. from a browser capture) wins when it's
+        // usable; otherwise fall back to guessing from the URL.
+        let base = filename
+            .as_deref()
+            .and_then(sanitize_filename)
+            .unwrap_or_else(|| filename_from_url(&url));
         let now = now_ms();
 
         // Reserve a collision-free name while holding the registry lock, so two
@@ -504,10 +512,11 @@ impl Engine {
     /// The category a browser-captured `url` should be filed under, if any. The
     /// extension doesn't pick one, so the engine runs the same rules the manual
     /// add does — tagged as a browser capture so source-filtered categories treat
-    /// it correctly.
-    pub fn categorize_capture(&self, url: &str) -> Option<String> {
+    /// it correctly. A known `filename` (from the capture) feeds the name/extension
+    /// triggers, so a URL with no obvious extension still categorizes.
+    pub fn categorize_capture(&self, url: &str, filename: Option<&str>) -> Option<String> {
         use super::category::AddMethodKind;
-        let cand = Candidate::from_url(url.trim(), AddMethodKind::BrowserCapture);
+        let cand = Candidate::from_url_named(url.trim(), AddMethodKind::BrowserCapture, filename);
         category::categorize(&cand, &self.inner.categories.lock().unwrap())
     }
 

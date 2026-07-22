@@ -67,6 +67,10 @@ struct AddReq {
     url: String,
     #[serde(default)]
     category: Option<String>,
+    /// The name the browser would have used (a link's `download` attribute, its
+    /// chosen filename, or a parsed `Content-Disposition`). Sanitized engine-side.
+    #[serde(default)]
+    filename: Option<String>,
     /// Captured request headers (Cookie, Referer, User-Agent…) so an auth-gated
     /// link downloads the same way the browser would.
     #[serde(default)]
@@ -141,17 +145,17 @@ fn handle_add(engine: &Engine, fallback_dir: &Path, rt: &Handle, mut request: Re
         .unwrap_or_else(|| fallback_dir.to_path_buf());
 
     // The extension doesn't choose a category, so run the same matching rules the
-    // manual add does (as a browser capture). An explicit category, if the payload
-    // ever sends one, still wins.
+    // manual add does (as a browser capture), using the captured filename so a URL
+    // with no obvious extension still categorizes. An explicit category still wins.
     let category = match req.category {
         Some(id) => Some(id),
-        None => engine.categorize_capture(&req.url),
+        None => engine.categorize_capture(&req.url, req.filename.as_deref()),
     };
 
     // Queuing ends in `tokio::spawn` inside the engine, which needs a runtime in
     // scope — this OS thread has none of its own, so borrow the engine's.
     let _guard = rt.enter();
-    match engine.add_http(req.url, dir, category, req.headers) {
+    match engine.add_http(req.url, dir, category, req.headers, req.filename) {
         Ok(task) => match serde_json::to_string(&task) {
             Ok(json) => respond_json(request, 200, &json),
             Err(_) => respond_json(request, 500, r#"{"error":"couldn't serialize the task"}"#),
