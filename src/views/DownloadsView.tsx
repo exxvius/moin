@@ -317,6 +317,36 @@ function loadSort(): SortLevel[] {
   return [];
 }
 
+// The status + category filters persist too, so they survive leaving the page and
+// relaunching (like the sort order already does).
+const STATUS_KEY = "moin-dl-status";
+const CATEGORY_KEY = "moin-dl-category";
+const FILTER_IDS = FILTERS.map((f) => f.id);
+
+function loadStatusSel(): Set<FilterId> {
+  try {
+    const v = JSON.parse(localStorage.getItem(STATUS_KEY) ?? "");
+    if (Array.isArray(v)) {
+      const valid = v.filter((x): x is FilterId => FILTER_IDS.includes(x));
+      if (valid.length) return new Set(valid);
+    }
+  } catch {
+    // ignore malformed storage
+  }
+  return new Set(["all"]);
+}
+function loadCategorySel(): Set<string> {
+  try {
+    const v = JSON.parse(localStorage.getItem(CATEGORY_KEY) ?? "");
+    if (Array.isArray(v) && v.length && v.every((x) => typeof x === "string")) {
+      return new Set(v);
+    }
+  } catch {
+    // ignore malformed storage
+  }
+  return new Set([""]);
+}
+
 // Once a row changes position, it holds that slot for this long — so live-sorted
 // rows (e.g. by progress) can't flip-flop past each other every tick.
 const REORDER_COOLDOWN_MS = 1000;
@@ -364,14 +394,10 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   const store = useStore();
   // Multi-select status filter. "all" is a reset: picking it clears the rest;
   // picking any specific status drops "all". Never empty (falls back to "all").
-  const [statusSel, setStatusSel] = useState<Set<FilterId>>(
-    () => new Set<FilterId>(["all"]),
-  );
+  const [statusSel, setStatusSel] = useState<Set<FilterId>>(loadStatusSel);
   // Multi-select category filter. "" = "All categories" (reset sentinel); "none"
   // = uncategorized; otherwise category ids. Same all-is-a-reset behavior.
-  const [categorySel, setCategorySel] = useState<Set<string>>(
-    () => new Set<string>([""]),
-  );
+  const [categorySel, setCategorySel] = useState<Set<string>>(loadCategorySel);
   const [query, setQuery] = useState("");
   const [sortStack, setSortStack] = useState<SortLevel[]>(loadSort);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -393,6 +419,12 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   useEffect(() => {
     localStorage.setItem(SORT_KEY, JSON.stringify(sortStack));
   }, [sortStack]);
+  useEffect(() => {
+    localStorage.setItem(STATUS_KEY, JSON.stringify([...statusSel]));
+  }, [statusSel]);
+  useEffect(() => {
+    localStorage.setItem(CATEGORY_KEY, JSON.stringify([...categorySel]));
+  }, [categorySel]);
 
   const q = query.trim().toLowerCase();
 
