@@ -306,10 +306,15 @@ impl TorrentEngine {
             let _ = session.unpause(&handle).await;
         }
 
-        // (Deliberately no placeholder cleanup here: librqbit pre-creates and holds
-        // the excluded files' handles, so deleting them out from under it makes a
-        // later re-selection write to an orphaned handle — data transfers but never
-        // appears on disk. Empty stubs are tidied up when the torrent is removed.)
+        // Push the selection to the storage so it never creates/writes deselected
+        // files (the add-time `only_files` reaches the piece picker but not the
+        // storage; `update_only_files` reaches both). A no-op when everything's
+        // selected. Deselected files then stay at 0 bytes on disk.
+        if let Some(selected) = selected_indices(&task.files) {
+            let _ = session
+                .update_only_files(&handle, &selected.into_iter().collect())
+                .await;
+        }
 
         // Scrape the trackers for seeder/leecher counts in the background (librqbit
         // doesn't expose them), refreshing a shared value the poll loop reads.
