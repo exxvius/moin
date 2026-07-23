@@ -1,13 +1,41 @@
 // Thin typed wrappers over Tauri `invoke`.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { BackendInfo, Category, Settings, Task, ToolStatus } from "./types";
+import type {
+  BackendInfo,
+  Category,
+  Settings,
+  Task,
+  ToolStatus,
+  TorrentDetails,
+  TorrentPreview,
+} from "./types";
 
 export const api = {
   addDownload: (url: string, category?: string | null) =>
     invoke<Task>("add_download", { url, category: category ?? null }),
-  addTorrent: (source: string, category?: string | null) =>
-    invoke<Task>("add_torrent", { source, category: category ?? null }),
+  prepareTorrent: (source: string) =>
+    invoke<TorrentPreview>("prepare_torrent", { source }),
+  addTorrent: (
+    source: string,
+    dir: string,
+    category: string | null,
+    selected: number[],
+    folder: string | null,
+    renames: string[],
+  ) =>
+    invoke<Task>("add_torrent", {
+      source,
+      dir,
+      category,
+      selected,
+      folder,
+      renames,
+    }),
+  torrentDetails: (id: string) =>
+    invoke<TorrentDetails>("torrent_details", { id }),
+  setTorrentFiles: (id: string, selected: number[]) =>
+    invoke<void>("set_torrent_files", { id, selected }),
   listDownloads: () => invoke<Task[]>("list_downloads"),
   pauseDownload: (id: string) => invoke<void>("pause_download", { id }),
   resumeDownload: (id: string) => invoke<void>("resume_download", { id }),

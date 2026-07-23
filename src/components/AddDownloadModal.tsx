@@ -9,6 +9,8 @@ import { api } from "../lib/api";
 
 interface Props {
   onClose: () => void;
+  /** Hand a magnet/.torrent source to the add-torrent modal (file picker etc.). */
+  onTorrent: (source: string) => void;
 }
 
 /** A magnet link — routed to the torrent engine rather than the HTTP one. */
@@ -19,7 +21,7 @@ function isMagnet(value: string): boolean {
 /** The add-a-download form as a modal, opened from the Downloads header. Takes a
  *  direct link, a magnet URI, or a picked `.torrent` file, optionally files it
  *  under a category (auto-suggested), and closes once the download is queued. */
-export function AddDownloadModal({ onClose }: Props) {
+export function AddDownloadModal({ onClose, onTorrent }: Props) {
   const store = useStore();
   const inputRef = useRef<HTMLInputElement>(null);
   const [url, setUrl] = useState("");
@@ -70,8 +72,7 @@ export function AddDownloadModal({ onClose }: Props) {
     setBusy(true);
     setError(null);
     try {
-      if (isMagnet(value)) await store.addTorrent(value, category || null);
-      else await store.add(value, category || null);
+      await store.add(value, category || null);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -82,6 +83,11 @@ export function AddDownloadModal({ onClose }: Props) {
   const submit = async () => {
     const value = url.trim();
     if (!value || busy) return;
+    // A magnet goes to the add-torrent modal (resolve metadata → pick files).
+    if (isMagnet(value)) {
+      onTorrent(value);
+      return;
+    }
     // Same source already in the active list? Ask before adding a second copy.
     // Archived downloads are effectively gone, so they don't count.
     if (store.all.some((t) => t.url === value && !t.archived)) {
@@ -91,7 +97,7 @@ export function AddDownloadModal({ onClose }: Props) {
     await doAdd(value);
   };
 
-  // Pick a local .torrent file via the OS dialog and queue it straight away.
+  // Pick a local .torrent file via the OS dialog and hand it to the torrent modal.
   const pickTorrent = async () => {
     if (busy) return;
     const picked = await open({
@@ -101,15 +107,7 @@ export function AddDownloadModal({ onClose }: Props) {
       filters: [{ name: "Torrent", extensions: ["torrent"] }],
     });
     if (typeof picked !== "string") return;
-    setBusy(true);
-    setError(null);
-    try {
-      await store.addTorrent(picked, category || null);
-      onClose();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setBusy(false);
-    }
+    onTorrent(picked);
   };
 
   return createPortal(

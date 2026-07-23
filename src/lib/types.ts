@@ -6,13 +6,28 @@ export type TaskKind = "http" | "torrent" | "media";
 export type TaskStatus =
   | "queued"
   | "connecting"
+  | "checking"
   | "downloading"
   | "paused"
   | "moving"
   | "completed"
+  | "seeding"
   | "failed"
   | "stalled"
   | "canceled";
+
+export type TorrentSource = "magnet" | "file";
+
+/** One file inside a torrent. */
+export interface TorrentFile {
+  /** Path relative to the torrent's output folder, using "/" separators. */
+  path: string;
+  size: number;
+  /** Whether this file is picked for download. */
+  selected: boolean;
+  /** Bytes fetched for this file so far. */
+  received: number;
+}
 
 export interface Task {
   id: string;
@@ -36,6 +51,52 @@ export interface Task {
   backend: string | null;
   /** Id of the category this download is filed under, else null. */
   category: string | null;
+
+  // Torrent-only fields (defaults/empty on HTTP + media tasks).
+  /** BitTorrent info hash (hex), once known. */
+  info_hash?: string | null;
+  /** Whether the torrent came from a magnet or a .torrent file. */
+  torrent_source?: TorrentSource | null;
+  /** Files inside the torrent, with per-file size, selection, and progress. */
+  files?: TorrentFile[];
+  /** Total bytes uploaded to peers (accumulates; feeds ratio + stats). */
+  uploaded?: number;
+  /** Live swarm readings (0 when not actively transferring). */
+  seeders?: number;
+  leechers?: number;
+  peers?: number;
+  /** Upload speed in bytes/sec (live). */
+  up_speed?: number;
+}
+
+/** One connected peer, for the detail panel's Peers tab. */
+export interface PeerInfo {
+  addr: string;
+  state: string;
+  downloaded: number;
+}
+
+/** Live per-torrent detail the expanded card polls while open. */
+export interface TorrentDetails {
+  files: TorrentFile[];
+  peers: PeerInfo[];
+  trackers: string[];
+  /** Have-pieces bucketed into ≤200 segments (fraction held per segment). */
+  pieces: number[];
+  /** Distributed copies reachable in the swarm (qBittorrent's "availability"). */
+  availability: number;
+}
+
+/** A torrent resolved to its file list, for the add-torrent modal. */
+export interface TorrentPreview {
+  info_hash: string;
+  name: string | null;
+  total: number;
+  files: TorrentFile[];
+  /** Category a rule would file it under (modal pre-selects it), else null. */
+  suggested_category: string | null;
+  /** Folder the download would default to (modal shows + lets you override). */
+  default_dir: string;
 }
 
 export interface TaskProgress {
@@ -44,6 +105,12 @@ export interface TaskProgress {
   total: number | null;
   speed: number;
   status: TaskStatus;
+  /** Torrent-only live readings (0 for HTTP). */
+  up_speed: number;
+  uploaded: number;
+  peers: number;
+  seeders: number;
+  leechers: number;
 }
 
 /** What moving a download to another category does to its file. */
