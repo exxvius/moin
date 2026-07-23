@@ -2460,7 +2460,7 @@ dependencies = [
 [[package]]
 name = "librqbit"
 version = "8.1.1"
-source = "git+https://github.com/exxvius/rqbit?rev=164c7ec4456dacaac9cd642ef181c845d58d5c88#164c7ec4456dacaac9cd642ef181c845d58d5c88"
+source = "git+https://github.com/exxvius/rqbit?rev=e8d3189deaed4c8b2797d49d5806133e0f0f5c93#e8d3189deaed4c8b2797d49d5806133e0f0f5c93"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2515,7 +2515,7 @@ dependencies = [
 [[package]]
 name = "librqbit-bencode"
 version = "3.1.0"
-source = "git+https://github.com/exxvius/rqbit?rev=164c7ec4456dacaac9cd642ef181c845d58d5c88#164c7ec4456dacaac9cd642ef181c845d58d5c88"
+source = "git+https://github.com/exxvius/rqbit?rev=e8d3189deaed4c8b2797d49d5806133e0f0f5c93#e8d3189deaed4c8b2797d49d5806133e0f0f5c93"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2528,7 +2528,7 @@ dependencies = [
 [[package]]
 name = "librqbit-buffers"
 version = "4.2.0"
-source = "git+https://github.com/exxvius/rqbit?rev=164c7ec4456dacaac9cd642ef181c845d58d5c88#164c7ec4456dacaac9cd642ef181c845d58d5c88"
+source = "git+https://github.com/exxvius/rqbit?rev=e8d3189deaed4c8b2797d49d5806133e0f0f5c93#e8d3189deaed4c8b2797d49d5806133e0f0f5c93"
 dependencies = [
  "bytes",
  "librqbit-clone-to-owned",
@@ -2538,7 +2538,7 @@ dependencies = [
 [[package]]
 name = "librqbit-clone-to-owned"
 version = "3.0.1"
-source = "git+https://github.com/exxvius/rqbit?rev=164c7ec4456dacaac9cd642ef181c845d58d5c88#164c7ec4456dacaac9cd642ef181c845d58d5c88"
+source = "git+https://github.com/exxvius/rqbit?rev=e8d3189deaed4c8b2797d49d5806133e0f0f5c93#e8d3189deaed4c8b2797d49d5806133e0f0f5c93"
 dependencies = [
  "bytes",
 ]
@@ -2546,7 +2546,7 @@ dependencies = [
 [[package]]
 name = "librqbit-core"
 version = "5.0.0"
-source = "git+https://github.com/exxvius/rqbit?rev=164c7ec4456dacaac9cd642ef181c845d58d5c88#164c7ec4456dacaac9cd642ef181c845d58d5c88"
+source = "git+https://github.com/exxvius/rqbit?rev=e8d3189deaed4c8b2797d49d5806133e0f0f5c93#e8d3189deaed4c8b2797d49d5806133e0f0f5c93"
 dependencies = [
  "anyhow",
  "assert_cfg",
@@ -2570,7 +2570,7 @@ dependencies = [
 [[package]]
 name = "librqbit-dht"
 version = "5.3.1"
-source = "git+https://github.com/exxvius/rqbit?rev=164c7ec4456dacaac9cd642ef181c845d58d5c88#164c7ec4456dacaac9cd642ef181c845d58d5c88"
+source = "git+https://github.com/exxvius/rqbit?rev=e8d3189deaed4c8b2797d49d5806133e0f0f5c93#e8d3189deaed4c8b2797d49d5806133e0f0f5c93"
 dependencies = [
  "anyhow",
  "backoff",
@@ -2598,7 +2598,7 @@ dependencies = [
 [[package]]
 name = "librqbit-peer-protocol"
 version = "4.3.0"
-source = "git+https://github.com/exxvius/rqbit?rev=164c7ec4456dacaac9cd642ef181c845d58d5c88#164c7ec4456dacaac9cd642ef181c845d58d5c88"
+source = "git+https://github.com/exxvius/rqbit?rev=e8d3189deaed4c8b2797d49d5806133e0f0f5c93#e8d3189deaed4c8b2797d49d5806133e0f0f5c93"
 dependencies = [
  "anyhow",
  "bincode 1.3.3",
@@ -2616,7 +2616,7 @@ dependencies = [
 [[package]]
 name = "librqbit-sha1-wrapper"
 version = "4.1.0"
-source = "git+https://github.com/exxvius/rqbit?rev=164c7ec4456dacaac9cd642ef181c845d58d5c88#164c7ec4456dacaac9cd642ef181c845d58d5c88"
+source = "git+https://github.com/exxvius/rqbit?rev=e8d3189deaed4c8b2797d49d5806133e0f0f5c93#e8d3189deaed4c8b2797d49d5806133e0f0f5c93"
 dependencies = [
  "assert_cfg",
  "crypto-hash",
@@ -2625,7 +2625,7 @@ dependencies = [
 [[package]]
 name = "librqbit-tracker-comms"
 version = "3.0.0"
-source = "git+https://github.com/exxvius/rqbit?rev=164c7ec4456dacaac9cd642ef181c845d58d5c88#164c7ec4456dacaac9cd642ef181c845d58d5c88"
+source = "git+https://github.com/exxvius/rqbit?rev=e8d3189deaed4c8b2797d49d5806133e0f0f5c93#e8d3189deaed4c8b2797d49d5806133e0f0f5c93"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2648,7 +2648,7 @@ dependencies = [
 [[package]]
 name = "librqbit-upnp"
 version = "1.0.0"
-source = "git+https://github.com/exxvius/rqbit?rev=164c7ec4456dacaac9cd642ef181c845d58d5c88#164c7ec4456dacaac9cd642ef181c845d58d5c88"
+source = "git+https://github.com/exxvius/rqbit?rev=e8d3189deaed4c8b2797d49d5806133e0f0f5c93#e8d3189deaed4c8b2797d49d5806133e0f0f5c93"
 dependencies = [
  "anyhow",
  "bstr",

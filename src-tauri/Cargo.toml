@@ -61,7 +61,7 @@ async-trait = "0.1"
 # upstream keeps internal, so we can draw a piece bar + availability figure.
 # default-features off drops the bundled http-api/webui/axum surface we don't use;
 # default-tls keeps the TLS stack on native TLS (no NASM/aws-lc).
-librqbit = { git = "https://github.com/exxvius/rqbit", rev = "164c7ec4456dacaac9cd642ef181c845d58d5c88", default-features = false, features = ["default-tls"] }
+librqbit = { git = "https://github.com/exxvius/rqbit", rev = "e8d3189deaed4c8b2797d49d5806133e0f0f5c93", default-features = false, features = ["default-tls"] }
 
 # Download registry + resume state.
 rusqlite = { version = "0.31", features = ["bundled"] }
