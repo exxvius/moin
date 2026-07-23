@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use librqbit::{
     limits::LimitsConfig, torrent_from_bytes, AddTorrent, AddTorrentOptions, AddTorrentResponse,
-    ByteBufOwned, Magnet, Session, SessionOptions, TorrentMetaV1Info,
+    ByteBufOwned, Magnet, Session, SessionOptions, SessionPersistenceConfig, TorrentMetaV1Info,
 };
 use tokio::sync::OnceCell;
 
@@ -97,8 +97,20 @@ impl TorrentEngine {
                 let net = *self.net.lock().unwrap();
                 let start = net.listen_port.max(1);
                 let opts = SessionOptions {
-                    // Restore piece state quickly after a restart / resume.
+                    // Persist the have-bitfield so a reopened torrent restores from
+                    // disk instead of re-hashing every file. `fastresume` only writes
+                    // that state to disk when persistence is set (otherwise the fork
+                    // uses a non-persistent bitfield and re-checks on every launch).
                     fastresume: true,
+                    persistence: Some(SessionPersistenceConfig::Json {
+                        folder: Some(store_dir.join("session")),
+                    }),
+                    // moin re-adds torrents from its own manifest, so librqbit must
+                    // NOT auto-re-add every persisted torrent on startup (it would
+                    // fight our resume and bloat the session with finished ones). This
+                    // is the fork flag that keeps the persistent bitfield without the
+                    // auto-restore. Deselected/removed torrents stay moin's call.
+                    dont_restore_persisted: true,
                     listen_port_range: Some(start..start.saturating_add(LISTEN_PORT_SPAN)),
                     disable_dht: !net.dht,
                     enable_upnp_port_forwarding: net.upnp,
@@ -503,7 +515,7 @@ fn torrent_input(source: &str) -> Result<AddTorrent<'_>, String> {
 const PIECE_BUCKETS: usize = 200;
 
 /// Whether piece `i` is set in a big-endian (Msb0) have-bitfield.
-fn have_bit(bytes: &[u8], i: usize) -> bool {
+pub(crate) fn have_bit(bytes: &[u8], i: usize) -> bool {
     bytes
         .get(i / 8)
         .map(|b| (b >> (7 - (i % 8))) & 1 == 1)
@@ -512,7 +524,7 @@ fn have_bit(bytes: &[u8], i: usize) -> bool {
 
 /// Bucket a have-bitfield into ≤[`PIECE_BUCKETS`] segments, each the fraction of
 /// pieces in its range that we hold (0.0–1.0).
-fn bucket_haves(bytes: &[u8], total: usize) -> Vec<f32> {
+pub(crate) fn bucket_haves(bytes: &[u8], total: usize) -> Vec<f32> {
     if total == 0 {
         return Vec::new();
     }
@@ -535,7 +547,7 @@ fn bucket_haves(bytes: &[u8], total: usize) -> Vec<f32> {
 
 /// Distributed copies of the torrent in the swarm: the rarest piece's
 /// availability, counting a piece we already hold as one copy.
-fn distributed_copies(avail: &[u32], have: &[u8], total: usize) -> f64 {
+pub(crate) fn distributed_copies(avail: &[u32], have: &[u8], total: usize) -> f64 {
     if total == 0 {
         return 0.0;
     }

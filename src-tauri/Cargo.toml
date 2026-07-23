@@ -87,3 +87,11 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# TEMPORARY local override: the rqbit fork change (dont_restore_persisted, fork
+# commit 164c7ec4) isn't pushed to github yet, so build against the local clone. The
+# `rev` above stays at the last pushed commit so cargo can still resolve the source;
+# this patch swaps in the newer local code. Once the fork is pushed, delete this
+# block and bump the `rev` to 164c7ec4.
+[patch."https://github.com/exxvius/rqbit"]
+librqbit = { path = "D:/Tools/rqbit-fork/crates/librqbit" }
