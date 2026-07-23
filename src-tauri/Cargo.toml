@@ -43,7 +43,7 @@ tracing-appender = "0.2"
 # Async runtime for the download engines (librqbit + media land in later phases;
 # Tauri already hosts a tokio runtime we build on). `process` drives the managed
 # aria2c daemon and its `--version` probe.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "io-util", "time", "process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "io-util", "time", "process", "net"] }
 
 # Direct HTTP downloads: streaming bodies + Range-based resume. rustls keeps the
 # TLS stack self-contained (no system OpenSSL).
@@ -53,10 +53,12 @@ futures-util = "0.3"
 async-trait = "0.1"
 
 # Embedded BitTorrent engine: an in-process librqbit Session drives magnets and
-# .torrent files with no external tools. default-features off drops the bundled
-# http-api/webui/axum surface we don't use; rust-tls keeps the TLS stack on
-# rustls like the rest of moin (no system OpenSSL).
-librqbit = { version = "8", default-features = false, features = ["default-tls"] }
+# .torrent files with no external tools. We pin a small moin fork of rqbit
+# (branch `moin`) that exposes the have-bitfield + per-peer piece availability
+# upstream keeps internal, so we can draw a piece bar + availability figure.
+# default-features off drops the bundled http-api/webui/axum surface we don't use;
+# default-tls keeps the TLS stack on native TLS (no NASM/aws-lc).
+librqbit = { git = "https://github.com/exxvius/rqbit", rev = "4ad97772c4d76b6acd604067fb6652af2b87fb1a", default-features = false, features = ["default-tls"] }
 
 # Download registry + resume state.
 rusqlite = { version = "0.31", features = ["bundled"] }

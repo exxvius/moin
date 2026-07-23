@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use super::backend::{Control, DownloadBackend, NetConfig, Outcome, ProgressFn, TransferOpts};
 use super::http;
-use super::task::{Task, TaskKind};
+use super::task::{ResolvedTorrent, Task, TaskKind, TorrentDetails};
 use super::torrent::TorrentEngine;
 
 pub struct EmbeddedBackend {
@@ -55,6 +55,26 @@ impl DownloadBackend for EmbeddedBackend {
 
     fn reconfigure(&self, net: NetConfig) {
         *self.client.lock().unwrap() = build_client(net.connect_timeout);
+    }
+
+    async fn resolve_torrent(&self, source: &str) -> Option<Result<ResolvedTorrent, String>> {
+        Some(self.torrent.resolve(source).await)
+    }
+
+    async fn torrent_details(&self, info_hash: &str) -> Option<Result<TorrentDetails, String>> {
+        Some(self.torrent.details(info_hash).await)
+    }
+
+    async fn set_torrent_files(
+        &self,
+        info_hash: &str,
+        selected: &[usize],
+    ) -> Option<Result<(), String>> {
+        Some(self.torrent.set_files(info_hash, selected).await)
+    }
+
+    async fn remove_torrent(&self, info_hash: &str) -> Option<Result<(), String>> {
+        Some(self.torrent.remove(info_hash).await)
     }
 
     async fn run(

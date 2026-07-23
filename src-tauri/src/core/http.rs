@@ -237,7 +237,7 @@ async fn single_stream(
     };
 
     let mut received = start;
-    progress(received, total);
+    progress(received, total, None);
 
     // How long to wait for a chunk before waking to re-check pause/cancel, and
     // how many such stalls in a row mean the connection has gone quiet.
@@ -286,7 +286,7 @@ async fn single_stream(
             return Outcome::Failed(format!("write failed: {e}"));
         }
         received += bytes.len() as u64;
-        progress(received, total);
+        progress(received, total, None);
     }
 
     if let Err(e) = file.flush().await {

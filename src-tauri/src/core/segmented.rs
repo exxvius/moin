@@ -115,7 +115,7 @@ pub async fn download(
     let shared = Arc::new(Mutex::new(segs.clone()));
     // Set by any worker that hits a hard error, so the rest stop pulling promptly.
     let aborted = Arc::new(AtomicBool::new(false));
-    progress(received0, Some(total));
+    progress(received0, Some(total), None);
 
     let mut handles = Vec::new();
     for (idx, seg) in segs.iter().enumerate() {
@@ -287,7 +287,7 @@ impl Worker {
             self.seg.pos += n;
             let total_recv = self.received.fetch_add(n, Ordering::Relaxed) + n;
             self.shared.lock().unwrap()[self.idx].pos = self.seg.pos;
-            (self.progress)(total_recv, Some(self.total));
+            (self.progress)(total_recv, Some(self.total), None);
 
             if self.seg.done() {
                 break;

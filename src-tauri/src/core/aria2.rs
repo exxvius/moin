@@ -229,7 +229,7 @@ async fn poll_to_completion(
 
         let completed = num(&status, "completedLength");
         let total = num(&status, "totalLength");
-        progress(completed, (total > 0).then_some(total));
+        progress(completed, (total > 0).then_some(total), None);
 
         match status.get("status").and_then(Value::as_str).unwrap_or("") {
             "complete" => {

@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::task::{Task, TaskKind};
+use super::task::{ResolvedTorrent, Task, TaskKind, TaskStatus, TorrentDetails};
 
 /// What the supervisor is asking a running transfer to do. Polled by the backend
 /// between chunks, so pause/cancel take effect without tearing anything down.
@@ -84,9 +84,27 @@ pub enum Outcome {
     Failed(String),
 }
 
+/// Live torrent-only readings a backend reports alongside byte progress: upload
+/// activity, the connected-peer count, and the swarm's seeder/leecher counts
+/// (the latter from tracker scrape, since librqbit doesn't expose them). HTTP
+/// backends pass `None`.
+#[derive(Debug, Clone, Copy)]
+pub struct TorrentTick {
+    pub uploaded: u64,
+    pub up_speed: u64,
+    pub peers: u32,
+    pub seeders: u32,
+    pub leechers: u32,
+    /// The phase this reading reflects — `Checking` while verifying/resolving,
+    /// `Downloading` while fetching, `Seeding` once complete. Drives the task's
+    /// status directly (a torrent doesn't go through the HTTP status path).
+    pub status: TaskStatus,
+}
+
 /// Progress reporter handed to a backend. The backend calls it with the current
-/// received/total; the supervisor turns that into speed, events, and persistence.
-pub type ProgressFn = Arc<dyn Fn(u64, Option<u64>) + Send + Sync>;
+/// received/total (and, for torrents, a swarm/upload tick); the supervisor turns
+/// that into speed, events, and persistence.
+pub type ProgressFn = Arc<dyn Fn(u64, Option<u64>, Option<TorrentTick>) + Send + Sync>;
 
 /// A concrete download engine. One instance handles many tasks concurrently; the
 /// supervisor spawns a task per `run` call.
@@ -110,6 +128,36 @@ pub trait DownloadBackend: Send + Sync {
     /// Apply network settings (e.g. connect timeout) that changed at run time.
     /// Backends that build their own client rebuild it; others ignore it.
     fn reconfigure(&self, _net: NetConfig) {}
+
+    /// Resolve a torrent's metadata (its file list) without downloading it, so the
+    /// add-torrent modal can offer a file picker. `None` for backends that don't
+    /// do torrents; a magnet resolves from the swarm (and may time out).
+    async fn resolve_torrent(&self, _source: &str) -> Option<Result<ResolvedTorrent, String>> {
+        None
+    }
+
+    /// Live detail for an active torrent (files, peers, trackers), keyed by info
+    /// hash. `None` for non-torrent backends; `Some(Err)` if the torrent isn't
+    /// currently in the engine.
+    async fn torrent_details(&self, _info_hash: &str) -> Option<Result<TorrentDetails, String>> {
+        None
+    }
+
+    /// Change which files an active torrent downloads (the indices to keep).
+    /// `None` for non-torrent backends.
+    async fn set_torrent_files(
+        &self,
+        _info_hash: &str,
+        _selected: &[usize],
+    ) -> Option<Result<(), String>> {
+        None
+    }
+
+    /// Detach a torrent from the engine, keeping its files (the caller deletes
+    /// data itself). `None` for non-torrent backends.
+    async fn remove_torrent(&self, _info_hash: &str) -> Option<Result<(), String>> {
+        None
+    }
 
     /// Drive `task` to a terminal [`Outcome`], honoring `control` and reporting
     /// progress via `progress`. `task.received` is the byte offset to resume from;

@@ -9,6 +9,7 @@ pub mod embedded;
 pub mod engine;
 pub mod fsattr;
 pub mod http;
+pub mod scrape;
 pub mod segmented;
 pub mod settings;
 pub mod store;
