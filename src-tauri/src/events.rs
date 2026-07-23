@@ -9,6 +9,10 @@
 pub const TASK_ADDED: &str = "moin-task-added";
 /// Frequent progress tick for an active task. Payload: `TaskProgress`.
 pub const TASK_PROGRESS: &str = "moin-task-progress";
+/// A whole interval's worth of progress ticks, coalesced into one event so the
+/// IPC volume stays flat no matter how many torrents are active. Payload:
+/// `Vec<TaskProgress>` (the latest reading per task since the last flush).
+pub const TASK_PROGRESS_BATCH: &str = "moin-task-progress-batch";
 /// A task's status changed (connecting, paused, done, failed…). Payload: `Task`.
 pub const TASK_UPDATED: &str = "moin-task-updated";
 /// A task was removed from the registry. Payload: the task id string.

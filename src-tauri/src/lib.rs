@@ -10,7 +10,9 @@ pub mod core;
 pub mod events;
 pub mod rpc;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tauri::{AppHandle, Emitter as _, Manager};
 
@@ -18,9 +20,16 @@ use crate::commands::AppState;
 use crate::core::engine::{Emitter, Engine};
 use crate::core::task::{Task, TaskProgress};
 
+/// How often the coalesced progress buffer is flushed to the UI as one event.
+const PROGRESS_FLUSH_MS: u64 = 250;
+
 /// Bridges the engine's [`Emitter`] onto Tauri's event system.
 struct AppEmitter {
     app: AppHandle,
+    /// Progress ticks buffered by task id (latest wins) between flushes. Emitted
+    /// as a single batched event on a timer so hundreds of per-torrent ticks a
+    /// second collapse into a few IPC messages — flat cost at any torrent count.
+    progress: Arc<Mutex<HashMap<String, TaskProgress>>>,
 }
 
 impl Emitter for AppEmitter {
@@ -28,7 +37,9 @@ impl Emitter for AppEmitter {
         let _ = self.app.emit(events::TASK_ADDED, task);
     }
     fn progress(&self, p: &TaskProgress) {
-        let _ = self.app.emit(events::TASK_PROGRESS, p);
+        if let Ok(mut buf) = self.progress.lock() {
+            buf.insert(p.id.clone(), p.clone());
+        }
     }
     fn updated(&self, task: &Task) {
         let _ = self.app.emit(events::TASK_UPDATED, task);
@@ -36,6 +47,26 @@ impl Emitter for AppEmitter {
     fn removed(&self, id: &str) {
         let _ = self.app.emit(events::TASK_REMOVED, id);
     }
+}
+
+/// Drain the buffered progress ticks on a timer and emit them as one event. Runs
+/// on Tauri's own runtime so it's always active (never gated on capturing the
+/// engine's runtime handle), which also means the buffer can't grow unbounded.
+fn spawn_progress_flusher(app: AppHandle, buf: Arc<Mutex<HashMap<String, TaskProgress>>>) {
+    tauri::async_runtime::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_millis(PROGRESS_FLUSH_MS));
+        loop {
+            ticker.tick().await;
+            let batch: Vec<TaskProgress> = {
+                let mut b = buf.lock().unwrap();
+                if b.is_empty() {
+                    continue;
+                }
+                b.drain().map(|(_, v)| v).collect()
+            };
+            let _ = app.emit(events::TASK_PROGRESS_BATCH, &batch);
+        }
+    });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -78,11 +109,17 @@ pub fn run() {
             init_logging(&data_dir);
             tracing::info!("moin starting, data dir: {}", data_dir.display());
 
+            let progress_buf = Arc::new(Mutex::new(HashMap::new()));
             let emitter = Arc::new(AppEmitter {
                 app: app.handle().clone(),
+                progress: progress_buf.clone(),
             });
             let engine = Engine::new(data_dir, emitter)
                 .map_err(|e| format!("failed to start the download engine: {e}"))?;
+
+            // Coalesce progress ticks into one periodic event so IPC stays flat as
+            // the number of active torrents grows (and the buffer never piles up).
+            spawn_progress_flusher(app.handle().clone(), progress_buf);
 
             // Start the loopback RPC server the browser extension talks to. It
             // needs the OS Downloads folder as the fallback destination (the same

@@ -8,6 +8,13 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 // instead of a click.
 const DRAG_THRESHOLD = 5;
 
+/** Whether two id sets hold exactly the same members. */
+function sameSet(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const x of a) if (!b.has(x)) return false;
+  return true;
+}
+
 export interface Marquee {
   x: number;
   y: number;
@@ -138,14 +145,18 @@ export function useListSelection({
       // A marquee started with a modifier adds to what's already selected.
       const base = additive ? new Set(selectedRef.current) : new Set<string>();
       let dragging = false;
+      // Card boxes snapshotted once when the drag begins — they don't move during
+      // a marquee, so we never re-read layout (a getBoundingClientRect per card per
+      // mousemove was the lag). Only the visible rows are in the DOM (virtualized),
+      // so this is cheap regardless of the total item count.
+      let cardBoxes: { id: string; box: DOMRect }[] = [];
+      let raf = 0;
+      let latest: MouseEvent | null = null;
 
-      const onMove = (ev: MouseEvent) => {
-        if (!dragging && Math.hypot(ev.clientX - startX, ev.clientY - startY) < DRAG_THRESHOLD)
-          return;
-        dragging = true;
-        ev.preventDefault();
-        document.body.style.userSelect = "none";
-
+      const paint = () => {
+        raf = 0;
+        const ev = latest;
+        if (!ev) return;
         const left = Math.min(startX, ev.clientX);
         const top = Math.min(startY, ev.clientY);
         const right = Math.max(startX, ev.clientX);
@@ -164,19 +175,37 @@ export function useListSelection({
         });
 
         const next = new Set(base);
-        for (const el of container.querySelectorAll<HTMLElement>(".dl-card")) {
-          const b = el.getBoundingClientRect();
-          const hit =
-            b.left < right && b.right > left && b.top < bottom && b.bottom > top;
-          if (hit && el.dataset.id) next.add(el.dataset.id);
+        for (const { id: cid, box: b } of cardBoxes) {
+          if (b.left < right && b.right > left && b.top < bottom && b.bottom > top)
+            next.add(cid);
         }
-        setSelected(next);
+        // Only push a new selection when it actually changed, so sweeping within
+        // the same set of rows doesn't re-render the list every frame.
+        setSelected((prev) => (sameSet(prev, next) ? prev : next));
+      };
+
+      const onMove = (ev: MouseEvent) => {
+        if (!dragging && Math.hypot(ev.clientX - startX, ev.clientY - startY) < DRAG_THRESHOLD)
+          return;
+        if (!dragging) {
+          dragging = true;
+          document.body.style.userSelect = "none";
+          cardBoxes = Array.from(
+            container.querySelectorAll<HTMLElement>(".dl-card"),
+          )
+            .filter((el) => el.dataset.id)
+            .map((el) => ({ id: el.dataset.id as string, box: el.getBoundingClientRect() }));
+        }
+        ev.preventDefault();
+        latest = ev;
+        if (!raf) raf = requestAnimationFrame(paint);
       };
 
       const onUp = () => {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
         document.body.style.userSelect = "";
+        if (raf) cancelAnimationFrame(raf);
         if (dragging) {
           setMarquee(null);
           return;

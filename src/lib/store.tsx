@@ -29,23 +29,58 @@ interface State {
   speeds: Record<string, number>;
   /** Relocation progress by id, only while the task is Moving. */
   moves: Record<string, MoveProgress>;
+  /** Bumps only when the task *set* changes (add/remove/load), so the sorted
+   *  order can be memoized and never re-sorted on a progress tick. */
+  version: number;
 }
 
 type Action =
   | { type: "LOAD"; tasks: Task[] }
   | { type: "ADDED"; task: Task }
   | { type: "UPDATED"; task: Task }
-  | { type: "PROGRESS"; p: TaskProgress }
+  // Progress ticks are coalesced and applied a whole frame's worth at a time, so
+  // the big `tasks` object is spread once per frame instead of once per tick.
+  | { type: "PROGRESS_BATCH"; updates: TaskProgress[] }
   | { type: "REMOVED"; id: string };
 
-const initial: State = { tasks: {}, speeds: {}, moves: {} };
+const initial: State = { tasks: {}, speeds: {}, moves: {}, version: 0 };
+
+/** Fold one progress reading into the task/speed/move maps, cloning each map at
+ *  most once per batch (the maps passed in are the working copies). */
+function applyProgress(
+  p: TaskProgress,
+  tasks: Record<string, Task>,
+  speeds: Record<string, number>,
+  moves: Record<string, MoveProgress>,
+): void {
+  const prev = tasks[p.id];
+  if (!prev) return;
+  // A Moving tick reports relocation bytes, not download bytes — keep it out of
+  // the task's own received/total so the download progress is preserved.
+  if (p.status === "moving") {
+    moves[p.id] = { moved: p.received, total: p.total };
+    return;
+  }
+  tasks[p.id] = {
+    ...prev,
+    received: p.received,
+    total: p.total ?? prev.total,
+    status: p.status,
+    up_speed: p.up_speed,
+    uploaded: p.uploaded,
+    peers: p.peers,
+    seeders: p.seeders,
+    leechers: p.leechers,
+  };
+  speeds[p.id] = p.speed;
+}
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case "LOAD": {
       const tasks: Record<string, Task> = {};
       for (const t of action.tasks) tasks[t.id] = t;
-      return { tasks, speeds: {}, moves: {} };
+      return { tasks, speeds: {}, moves: {}, version: state.version + 1 };
     }
     case "ADDED":
     case "UPDATED": {
@@ -56,53 +91,44 @@ function reducer(state: State, action: Action): State {
       // Relocation progress only lives while the task is Moving.
       const moves = { ...state.moves };
       if (task.status !== "moving") delete moves[task.id];
+      // A new id (ADDED, or an UPDATED for something not yet loaded) changes the
+      // set, so the sort order must be recomputed.
+      const isNew = state.tasks[task.id] === undefined;
       return {
-        ...state,
         tasks: { ...state.tasks, [task.id]: task },
         speeds,
         moves,
+        version: isNew ? state.version + 1 : state.version,
       };
     }
-    case "PROGRESS": {
-      const prev = state.tasks[action.p.id];
-      if (!prev) return state;
-      // A Moving tick reports relocation bytes, not download bytes — keep it out
-      // of the task's own received/total so the download progress is preserved.
-      if (action.p.status === "moving") {
-        return {
-          ...state,
-          moves: {
-            ...state.moves,
-            [action.p.id]: { moved: action.p.received, total: action.p.total },
-          },
-        };
+    case "PROGRESS_BATCH": {
+      // Clone each map lazily — only if a batched update actually touches it.
+      let tasks = state.tasks;
+      let speeds = state.speeds;
+      let moves = state.moves;
+      for (const p of action.updates) {
+        if (!(p.id in state.tasks)) continue;
+        if (p.status === "moving") {
+          if (moves === state.moves) moves = { ...state.moves };
+        } else {
+          if (tasks === state.tasks) tasks = { ...state.tasks };
+          if (speeds === state.speeds) speeds = { ...state.speeds };
+        }
+        applyProgress(p, tasks, speeds, moves);
       }
-      const next: Task = {
-        ...prev,
-        received: action.p.received,
-        total: action.p.total ?? prev.total,
-        status: action.p.status,
-        // Live torrent readings ride the same tick.
-        up_speed: action.p.up_speed,
-        uploaded: action.p.uploaded,
-        peers: action.p.peers,
-        seeders: action.p.seeders,
-        leechers: action.p.leechers,
-      };
-      return {
-        ...state,
-        tasks: { ...state.tasks, [next.id]: next },
-        speeds: { ...state.speeds, [next.id]: action.p.speed },
-      };
+      if (tasks === state.tasks && speeds === state.speeds && moves === state.moves)
+        return state;
+      return { ...state, tasks, speeds, moves };
     }
     case "REMOVED": {
+      if (!(action.id in state.tasks)) return state;
       const tasks = { ...state.tasks };
       const speeds = { ...state.speeds };
       const moves = { ...state.moves };
       delete tasks[action.id];
       delete speeds[action.id];
       delete moves[action.id];
-      return { tasks, speeds, moves };
+      return { tasks, speeds, moves, version: state.version + 1 };
     }
     default:
       return state;
@@ -160,7 +186,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     subscribeTasks({
       onAdded: (task) => dispatch({ type: "ADDED", task }),
-      onProgress: (p) => dispatch({ type: "PROGRESS", p }),
+      // The backend already coalesces ticks and flushes on a timer, so a batch
+      // arrives ready to apply in one dispatch.
+      onProgress: (batch) => dispatch({ type: "PROGRESS_BATCH", updates: batch }),
       onUpdated: (task) => dispatch({ type: "UPDATED", task }),
       onRemoved: (id) => dispatch({ type: "REMOVED", id }),
     }).then((u) => {
@@ -176,10 +204,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // The newest-first id order only depends on the task set, so it's memoized on
+  // `version` and never re-sorted on a progress tick.
+  const order = useMemo(
+    () =>
+      Object.values(state.tasks)
+        .sort((a, b) => b.created_at - a.created_at)
+        .map((t) => t.id),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state.version],
+  );
+
   const value = useMemo<StoreValue>(() => {
-    const all = Object.values(state.tasks).sort(
-      (a, b) => b.created_at - a.created_at,
-    );
+    const all = order
+      .map((id) => state.tasks[id])
+      .filter((t): t is Task => t != null);
     return {
       all,
       active: all.filter((t) => ACTIVE.includes(t.status)),
@@ -201,7 +240,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       forget: (id) => api.forgetDownload(id),
       moveToCategory: (ids, category) => api.moveToCategory(ids, category),
     };
-  }, [state, categories]);
+  }, [state, categories, order]);
 
   return (
     <StoreContext.Provider value={value}>{children}</StoreContext.Provider>

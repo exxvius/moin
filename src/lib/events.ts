@@ -5,7 +5,7 @@ import type { Task, TaskProgress, ToolProgress } from "./types";
 
 export const EV = {
   added: "moin-task-added",
-  progress: "moin-task-progress",
+  progressBatch: "moin-task-progress-batch",
   updated: "moin-task-updated",
   removed: "moin-task-removed",
   toolProgress: "moin-tool-progress",
@@ -13,7 +13,8 @@ export const EV = {
 
 export interface TaskHandlers {
   onAdded?: (task: Task) => void;
-  onProgress?: (p: TaskProgress) => void;
+  /** A coalesced batch of progress ticks (the backend flushes on a timer). */
+  onProgress?: (batch: TaskProgress[]) => void;
   onUpdated?: (task: Task) => void;
   onRemoved?: (id: string) => void;
 }
@@ -22,7 +23,7 @@ export interface TaskHandlers {
 export async function subscribeTasks(h: TaskHandlers): Promise<UnlistenFn> {
   const unlisteners: UnlistenFn[] = await Promise.all([
     listen<Task>(EV.added, (e) => h.onAdded?.(e.payload)),
-    listen<TaskProgress>(EV.progress, (e) => h.onProgress?.(e.payload)),
+    listen<TaskProgress[]>(EV.progressBatch, (e) => h.onProgress?.(e.payload)),
     listen<Task>(EV.updated, (e) => h.onUpdated?.(e.payload)),
     listen<string>(EV.removed, (e) => h.onRemoved?.(e.payload)),
   ]);

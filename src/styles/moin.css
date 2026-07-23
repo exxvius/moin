@@ -2069,7 +2069,14 @@
 .dl-scroll .ss-content {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  /* No flex gap: the list is windowed, so row spacing lives on each card as a
+     bottom margin instead — that keeps the virtual spacers' heights exact. */
+  gap: 0;
+}
+/* Row pitch for the windowed list (card height + this margin must equal the
+   ROW_STRIDE constant in DownloadsView). */
+.dl-scroll .dl-card {
+  margin-bottom: var(--space-3);
 }
 /* Rounded corners on the viewport so rows can't poke out behind the header's
    rounded corners as they scroll under it. */

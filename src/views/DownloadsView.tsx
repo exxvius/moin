@@ -1,4 +1,13 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  Fragment,
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type {
   CSSProperties,
   MouseEvent as ReactMouseEvent,
@@ -351,6 +360,15 @@ function loadCategorySel(): Set<string> {
 // rows (e.g. by progress) can't flip-flop past each other every tick.
 const REORDER_COOLDOWN_MS = 1000;
 
+// Windowing: only the rows in view (plus a buffer) are mounted; everything else
+// is represented by top/bottom spacer heights, so the scroll size and the custom
+// scrollbar stay correct at any count (10k+ stays smooth, and memory stays flat).
+// The collapsed row height + gap are fixed and must track the CSS; the one
+// expanded card's extra height is measured at runtime.
+const ROW_COLLAPSED = 56; // .dl-card collapsed height fallback (measured at runtime)
+const ROW_GAP = 12; // --space-3 between rows
+const V_BUFFER = 8; // rows kept mounted above/below the viewport
+
 // Reconcile the target sort order against the current display order: any row that
 // moved within the cooldown stays pinned to its slot, and the rest sort freely
 // into the gaps. Handles added/removed rows too. Returns the ids to display.
@@ -415,6 +433,14 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   const [torrentSource, setTorrentSource] = useState<string | null>(null);
   // Live width of the list, so columns can drop out when the window is narrow.
   const [listWidth, setListWidth] = useState(0);
+  // Windowing state: the viewport's scroll offset + height drive which rows mount,
+  // and the expanded card's measured extra height keeps the spacer math exact.
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportH, setViewportH] = useState(0);
+  const [expandedExtra, setExpandedExtra] = useState(0);
+  // Measured collapsed-row height (falls back to the CSS constant) so the window
+  // math stays exact even if the row styling changes.
+  const [rowH, setRowH] = useState(ROW_COLLAPSED);
 
   useEffect(() => {
     localStorage.setItem(SORT_KEY, JSON.stringify(sortStack));
@@ -506,6 +532,30 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
     displayOrderRef.current = displayIds;
   });
 
+  // Windowing: from the scroll offset + viewport height, derive the slice of rows
+  // to actually render plus the spacer heights standing in for the rest. The one
+  // expanded card shifts every row below it by its measured extra height.
+  const stride = rowH + ROW_GAP;
+  const vTotal = displayed.length;
+  const vExpandedIdx = expanded
+    ? displayed.findIndex((t) => t.id === expanded)
+    : -1;
+  const offsetOf = (i: number) =>
+    i * stride + (vExpandedIdx >= 0 && i > vExpandedIdx ? expandedExtra : 0);
+  const contentH = vTotal * stride + (vExpandedIdx >= 0 ? expandedExtra : 0);
+  const indexAt = (y: number) => {
+    if (vExpandedIdx < 0) return Math.floor(y / stride);
+    const top = vExpandedIdx * stride;
+    if (y < top) return Math.floor(y / stride);
+    if (y < top + stride + expandedExtra) return vExpandedIdx;
+    return Math.floor((y - expandedExtra) / stride);
+  };
+  const vStart = Math.max(0, indexAt(scrollTop) - V_BUFFER);
+  const vEnd = Math.min(vTotal, indexAt(scrollTop + viewportH) + V_BUFFER + 1);
+  const visible = displayed.slice(vStart, vEnd);
+  const topSpacer = offsetOf(vStart);
+  const bottomSpacer = Math.max(0, contentH - offsetOf(vEnd));
+
   const counts: Record<FilterId, number> = {
     all: 0,
     active: 0,
@@ -530,8 +580,13 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   // mixed with others, the normal live columns stay.
   const isArchived = statusSel.size === 1 && statusSel.has("archived");
   const allColumns = isArchived ? ARCHIVED_COLUMNS : COLUMNS;
-  const columns =
-    listWidth > 0 ? fitColumns(allColumns, listWidth) : allColumns;
+  // Memoized so the column set (and thus every card's props) keeps a stable
+  // reference until the width bucket or archive mode actually changes — otherwise
+  // a new array each render defeats the card memoization below.
+  const columns = useMemo(
+    () => (listWidth > 0 ? fitColumns(allColumns, listWidth) : allColumns),
+    [allColumns, listWidth],
+  );
   const gridTemplate = columns.map((c) => c.width).join(" ");
   const primary = sortStack[0];
   const sortBy = (col: SortKey) => {
@@ -557,46 +612,43 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
           ],
     );
 
-  // FLIP: when the sorted order changes, animate each card sliding from its old
-  // position to its new one (e.g. one download passing another by progress).
   const listRef = useRef<HTMLDivElement>(null);
-  const prevTops = useRef<Map<string, number>>(new Map());
-  const prevOrder = useRef<string[]>([]);
+  // The list is windowed (only visible rows mount), so the old FLIP slide over
+  // every card no longer applies — reorders just re-place within the window.
+  void animateReorder;
+
+  // Reflect the viewport's scroll offset into state so the window recomputes as it
+  // scrolls (SmoothScroll fires this on every scroll).
+  const onListScroll = useCallback(() => {
+    const el = listRef.current;
+    if (el) setScrollTop(el.scrollTop);
+  }, []);
+
+  // Measure the collapsed row height and the expanded card's extra height so the
+  // window math stays exact. One query per render, guarded so it only re-renders
+  // when a height actually shifts.
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!list) return;
-    const cards = Array.from(list.querySelectorAll<HTMLElement>(".dl-card"));
-    const order = cards.map((c) => c.dataset.id ?? "");
-    const reordered =
-      order.length === prevOrder.current.length &&
-      order.some((id, i) => prevOrder.current[i] !== id);
-
-    for (const el of cards) {
-      const id = el.dataset.id ?? "";
-      const top = el.offsetTop;
-      const prev = prevTops.current.get(id);
-      if (animateReorder && reordered && prev != null && prev !== top) {
-        el.style.transition = "none";
-        el.style.transform = `translateY(${prev - top}px)`;
-        requestAnimationFrame(() => {
-          el.style.transition = "transform 240ms cubic-bezier(0.2, 0.9, 0.3, 1)";
-          el.style.transform = "";
-        });
-      }
-      prevTops.current.set(id, top);
+    const collapsed = list.querySelector<HTMLElement>(".dl-card:not(.open)");
+    if (collapsed) {
+      const h = collapsed.offsetHeight;
+      if (h > 0) setRowH((prev) => (Math.abs(prev - h) < 1 ? prev : h));
     }
-    const ids = new Set(order);
-    for (const id of Array.from(prevTops.current.keys())) {
-      if (!ids.has(id)) prevTops.current.delete(id);
-    }
-    prevOrder.current = order;
+    const open = list.querySelector<HTMLElement>(".dl-card.open");
+    const extra = open ? Math.max(0, open.offsetHeight - rowH) : 0;
+    setExpandedExtra((prev) => (Math.abs(prev - extra) < 1 ? prev : extra));
   });
 
-  // Track the list's width so columns can drop out when there's no room.
+  // Track the list's width (so columns drop out when narrow) and its height (so
+  // the window knows how many rows fit).
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
-    const measure = () => setListWidth(el.clientWidth);
+    const measure = () => {
+      setListWidth(el.clientWidth);
+      setViewportH(el.clientHeight);
+    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -647,13 +699,13 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
 
   // Right-click keeps an existing multi-selection; otherwise it targets the row
   // under the cursor. The menu's actions then apply to the whole selection.
-  const openMenu = (e: ReactMouseEvent, task: Task) => {
+  const openMenu = useCallback((e: ReactMouseEvent, task: Task) => {
     e.preventDefault();
     setConfirmRemove(false);
     setMoveOpen(false);
     sel.ensure(task.id);
     setMenu({ x: e.clientX, y: e.clientY });
-  };
+  }, [sel.ensure]);
 
   const closeMenu = () => {
     setMenu(null);
@@ -1155,6 +1207,7 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
           <SmoothScroll
             ref={listRef}
             className="dl-scroll"
+            onScroll={onListScroll}
             behind={
               <GhostGlowLayer
                 viewportRef={listRef}
@@ -1190,8 +1243,11 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
               </div>
             }
           >
-            {displayed.map((t) => (
-              <Card
+            {topSpacer > 0 && (
+              <div className="dl-spacer" style={{ height: topSpacer }} aria-hidden />
+            )}
+            {visible.map((t) => (
+              <MemoCard
                 key={t.id}
                 task={t}
                 speed={store.speeds[t.id] ?? 0}
@@ -1205,6 +1261,13 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
                 onContext={openMenu}
               />
             ))}
+            {bottomSpacer > 0 && (
+              <div
+                className="dl-spacer"
+                style={{ height: bottomSpacer }}
+                aria-hidden
+              />
+            )}
           </SmoothScroll>
         )}
       </div>
@@ -1645,3 +1708,7 @@ function Card({
     </div>
   );
 }
+
+// Memoized so a progress tick (which replaces only the changed task object) or a
+// selection sweep re-renders just the affected rows, not every card in the list.
+const MemoCard = memo(Card);
