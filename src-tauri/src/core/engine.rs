@@ -1326,13 +1326,25 @@ impl Inner {
                     let do_emit = now.duration_since(st.last_emit) >= Duration::from_millis(200);
                     if do_emit {
                         let dt = now.duration_since(st.last_emit).as_secs_f64().max(0.001);
-                        let inst = (received.saturating_sub(st.last_bytes)) as f64 / dt;
-                        // Exponential smoothing so the number doesn't jitter.
-                        st.speed = if st.speed == 0.0 {
-                            inst
+                        // Only the Downloading phase has a download speed. While a
+                        // torrent is Checking, `received` climbs at disk-read speed as
+                        // pieces are verified — folding that into the average produced a
+                        // huge phantom reading that then leaked into the row the moment
+                        // the phase flipped to Downloading. Seeding has no download
+                        // speed either. So hold speed at 0 off-phase, and keep the byte
+                        // mark current so the first real Downloading sample is a clean
+                        // delta, not a jump from wherever verification left off.
+                        if status == TaskStatus::Downloading {
+                            let inst = (received.saturating_sub(st.last_bytes)) as f64 / dt;
+                            // Exponential smoothing so the number doesn't jitter.
+                            st.speed = if st.speed == 0.0 {
+                                inst
+                            } else {
+                                st.speed * 0.7 + inst * 0.3
+                            };
                         } else {
-                            st.speed * 0.7 + inst * 0.3
-                        };
+                            st.speed = 0.0;
+                        }
                         st.last_emit = now;
                         st.last_bytes = received;
                     }
