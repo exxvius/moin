@@ -61,6 +61,19 @@ pub async fn add_download(
         .add_http(url, dir, category, headers.unwrap_or_default(), filename)
 }
 
+/// Add a torrent from a magnet URI or a local `.torrent` file path. `dest` is the
+/// download folder (the category's save-folder override still applies).
+#[tauri::command]
+pub async fn add_torrent(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    source: String,
+    category: Option<String>,
+) -> Result<Task, String> {
+    let dir = download_dir(&app, &state);
+    state.engine.add_torrent(source, dir, category)
+}
+
 #[tauri::command]
 pub fn list_downloads(state: State<'_, AppState>) -> Vec<Task> {
     state.engine.list()

@@ -14,6 +14,7 @@ pub mod settings;
 pub mod store;
 pub mod task;
 pub mod tool;
+pub mod torrent;
 
 // Torrent (librqbit) and media (yt-dlp) backends land in later phases, alongside
 // aria2c — each just a new `impl DownloadBackend` registered in the engine.

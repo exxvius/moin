@@ -6,6 +6,8 @@ import type { BackendInfo, Category, Settings, Task, ToolStatus } from "./types"
 export const api = {
   addDownload: (url: string, category?: string | null) =>
     invoke<Task>("add_download", { url, category: category ?? null }),
+  addTorrent: (source: string, category?: string | null) =>
+    invoke<Task>("add_torrent", { source, category: category ?? null }),
   listDownloads: () => invoke<Task[]>("list_downloads"),
   pauseDownload: (id: string) => invoke<void>("pause_download", { id }),
   resumeDownload: (id: string) => invoke<void>("resume_download", { id }),

@@ -1,24 +1,29 @@
-//! The built-in backend: reqwest for HTTP today, librqbit for BitTorrent once
-//! the torrent phase lands. It's always available and needs no external tools.
+//! The built-in backend: reqwest for HTTP and librqbit for BitTorrent. It's
+//! always available and needs no external tools.
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use super::backend::{Control, DownloadBackend, NetConfig, Outcome, ProgressFn, TransferOpts};
 use super::http;
 use super::task::{Task, TaskKind};
+use super::torrent::TorrentEngine;
 
 pub struct EmbeddedBackend {
     /// Behind a mutex so a connect-timeout change rebuilds it in place. Cloning a
     /// `reqwest::Client` is cheap (it's `Arc` inside), so `run` takes a clone and
     /// drops the lock before doing any I/O.
     client: Mutex<reqwest::Client>,
+    /// The shared torrent session, built lazily on the first magnet/.torrent.
+    torrent: TorrentEngine,
 }
 
 impl EmbeddedBackend {
-    pub fn new() -> Self {
+    pub fn new(data_dir: PathBuf) -> Self {
         Self {
             client: Mutex::new(build_client(None)),
+            torrent: TorrentEngine::new(data_dir),
         }
     }
 }
@@ -33,12 +38,6 @@ fn build_client(connect_timeout: Option<Duration>) -> reqwest::Client {
     builder.build().unwrap_or_default()
 }
 
-impl Default for EmbeddedBackend {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[async_trait::async_trait]
 impl DownloadBackend for EmbeddedBackend {
     fn id(&self) -> &'static str {
@@ -50,8 +49,8 @@ impl DownloadBackend for EmbeddedBackend {
     }
 
     fn supports(&self, kind: TaskKind) -> bool {
-        // Torrent arrives with librqbit in a later phase; media is yt-dlp's job.
-        matches!(kind, TaskKind::Http)
+        // HTTP over reqwest, torrents over librqbit; media is yt-dlp's job later.
+        matches!(kind, TaskKind::Http | TaskKind::Torrent)
     }
 
     fn reconfigure(&self, net: NetConfig) {
@@ -85,6 +84,7 @@ impl DownloadBackend for EmbeddedBackend {
                 )
                 .await
             }
+            TaskKind::Torrent => self.torrent.download(&task, &control, &progress).await,
             _ => Outcome::Failed("the built-in backend can't handle this source yet".to_string()),
         }
     }

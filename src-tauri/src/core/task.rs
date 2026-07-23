@@ -14,6 +14,34 @@ pub enum TaskKind {
     Media,
 }
 
+/// How a torrent task was added — a `magnet:` URI or a picked `.torrent` file.
+/// `None` on non-torrent tasks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TorrentSource {
+    Magnet,
+    File,
+}
+
+/// One file inside a (possibly multi-file) torrent. Empty on non-torrent tasks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TorrentFile {
+    /// Path relative to the torrent's output folder, using `/` separators.
+    pub path: String,
+    /// File size in bytes.
+    pub size: u64,
+    /// Whether this file is picked for download. Defaults on.
+    #[serde(default = "default_true")]
+    pub selected: bool,
+    /// Bytes fetched for this file so far.
+    #[serde(default)]
+    pub received: u64,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 /// A task's point in its lifecycle.
 ///
 /// ```text
@@ -32,6 +60,9 @@ pub enum TaskKind {
 /// went quiet without an outright error. The partial is kept; for HTTP it waits
 /// for a manual retry, while a torrent can slip back into `Downloading` on its
 /// own once a peer delivers data again.
+///
+/// `Seeding` is torrent-only: the download finished but the task keeps uploading
+/// to peers until a ratio/time limit or a manual stop moves it to `Completed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskStatus {
@@ -41,6 +72,7 @@ pub enum TaskStatus {
     Paused,
     Moving,
     Completed,
+    Seeding,
     Failed,
     Stalled,
     Canceled,
@@ -52,7 +84,8 @@ impl TaskStatus {
         matches!(self, TaskStatus::Completed | TaskStatus::Canceled)
     }
 
-    /// Waiting for or occupying a worker slot.
+    /// Waiting for or occupying a download worker slot. Seeding runs off the
+    /// download queue, so it doesn't count here.
     pub fn is_active(self) -> bool {
         matches!(
             self,
@@ -102,10 +135,48 @@ pub struct Task {
     /// a restart still authenticates. Empty for hand-added links.
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
+
+    // --- Torrent-only fields. All default/empty on HTTP + media tasks and
+    // ignored by their paths. For a torrent, `dest` is the output *folder*. ---
+    /// BitTorrent info hash (hex) once known — identifies the swarm and dedupes
+    /// a re-add of the same torrent.
+    #[serde(default)]
+    pub info_hash: Option<String>,
+    /// Whether the torrent came from a magnet URI or a `.torrent` file.
+    #[serde(default)]
+    pub torrent_source: Option<TorrentSource>,
+    /// Files inside the torrent, with per-file size, selection, and progress.
+    /// Empty until metadata resolves.
+    #[serde(default)]
+    pub files: Vec<TorrentFile>,
+    /// Total bytes uploaded to peers. Accumulates across sessions (persisted);
+    /// feeds the ratio and the all-time stats.
+    #[serde(default)]
+    pub uploaded: u64,
+    /// Live swarm readings — the count of complete seeders, of partial leechers,
+    /// and of currently connected peers. Transient: not persisted, refreshed by
+    /// the engine while the task is active, 0 otherwise.
+    #[serde(default)]
+    pub seeders: u32,
+    #[serde(default)]
+    pub leechers: u32,
+    #[serde(default)]
+    pub peers: u32,
+    /// Upload speed in bytes/sec. Transient, like the swarm counts.
+    #[serde(default)]
+    pub up_speed: u64,
 }
 
 impl Task {
+    /// True for torrent tasks. A torrent manages its own partials + fastresume
+    /// inside the output folder, so the single-file `.part`/`.part.meta` helpers
+    /// below don't apply to it.
+    pub fn is_torrent(&self) -> bool {
+        matches!(self.kind, TaskKind::Torrent)
+    }
+
     /// The partial-download file we stream into before the final rename.
+    /// HTTP/media only — a torrent uses [`Task::is_torrent`] instead.
     pub fn part_path(&self) -> String {
         format!("{}.part", self.dest)
     }
@@ -114,6 +185,16 @@ impl Task {
     /// multi-connection download, so it can resume after a pause or a restart.
     pub fn meta_path(&self) -> String {
         format!("{}.part.meta", self.dest)
+    }
+
+    /// Upload/download ratio for a torrent (uploaded ÷ received). 0 before
+    /// anything has been downloaded, so it never divides by zero.
+    pub fn ratio(&self) -> f64 {
+        if self.received == 0 {
+            0.0
+        } else {
+            self.uploaded as f64 / self.received as f64
+        }
     }
 }
 

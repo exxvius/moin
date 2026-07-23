@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { open } from "@tauri-apps/plugin-dialog";
 import { ConfirmModal } from "./ConfirmModal";
 import { Select } from "./Select";
 import { CategoryIcon } from "./CategoryIcon";
@@ -10,9 +11,14 @@ interface Props {
   onClose: () => void;
 }
 
-/** The add-a-download form as a modal, opened from the Downloads header. Pastes a
- *  direct link, optionally files it under a category (auto-suggested from the
- *  URL), and closes once the download is queued. */
+/** A magnet link — routed to the torrent engine rather than the HTTP one. */
+function isMagnet(value: string): boolean {
+  return value.trim().toLowerCase().startsWith("magnet:");
+}
+
+/** The add-a-download form as a modal, opened from the Downloads header. Takes a
+ *  direct link, a magnet URI, or a picked `.torrent` file, optionally files it
+ *  under a category (auto-suggested), and closes once the download is queued. */
 export function AddDownloadModal({ onClose }: Props) {
   const store = useStore();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -39,7 +45,8 @@ export function AddDownloadModal({ onClose }: Props) {
   }, [dupUrl, onClose]);
 
   // Suggest a category from the URL (debounced). A manual pick (touched) sticks;
-  // clearing the box re-enables auto-suggest.
+  // clearing the box re-enables auto-suggest. Magnets have no URL to read, so the
+  // engine auto-files them by torrent name at add time instead.
   useEffect(() => {
     const value = url.trim();
     if (!value) {
@@ -47,7 +54,7 @@ export function AddDownloadModal({ onClose }: Props) {
       setCategory("");
       return;
     }
-    if (touched) return;
+    if (touched || isMagnet(value)) return;
     const t = setTimeout(() => {
       api
         .suggestCategory(value)
@@ -63,7 +70,8 @@ export function AddDownloadModal({ onClose }: Props) {
     setBusy(true);
     setError(null);
     try {
-      await store.add(value, category || null);
+      if (isMagnet(value)) await store.addTorrent(value, category || null);
+      else await store.add(value, category || null);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -74,13 +82,34 @@ export function AddDownloadModal({ onClose }: Props) {
   const submit = async () => {
     const value = url.trim();
     if (!value || busy) return;
-    // Same URL already in the active list? Ask before adding a second copy.
+    // Same source already in the active list? Ask before adding a second copy.
     // Archived downloads are effectively gone, so they don't count.
     if (store.all.some((t) => t.url === value && !t.archived)) {
       setDupUrl(value);
       return;
     }
     await doAdd(value);
+  };
+
+  // Pick a local .torrent file via the OS dialog and queue it straight away.
+  const pickTorrent = async () => {
+    if (busy) return;
+    const picked = await open({
+      multiple: false,
+      directory: false,
+      title: "Choose a .torrent file",
+      filters: [{ name: "Torrent", extensions: ["torrent"] }],
+    });
+    if (typeof picked !== "string") return;
+    setBusy(true);
+    setError(null);
+    try {
+      await store.addTorrent(picked, category || null);
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
   };
 
   return createPortal(
@@ -97,9 +126,9 @@ export function AddDownloadModal({ onClose }: Props) {
         <input
           ref={inputRef}
           className="add-input selectable"
-          type="url"
+          type="text"
           inputMode="url"
-          placeholder="https://example.com/file.zip"
+          placeholder="Paste a link or magnet…"
           value={url}
           spellCheck={false}
           onChange={(e) => setUrl(e.target.value)}
@@ -108,7 +137,16 @@ export function AddDownloadModal({ onClose }: Props) {
           }}
         />
         <p className="dim add-modal-hint">
-          Paste a direct link. Torrents and media sites are coming next.
+          Paste a direct link or a magnet, or{" "}
+          <button
+            type="button"
+            className="link-btn"
+            onClick={pickTorrent}
+            disabled={busy}
+          >
+            choose a .torrent file
+          </button>
+          . Media sites are coming next.
         </p>
         {error && <p className="dl-error">{error}</p>}
 

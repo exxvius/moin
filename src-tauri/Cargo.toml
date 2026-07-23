@@ -52,6 +52,12 @@ futures-util = "0.3"
 # Async methods on the pluggable DownloadBackend trait (dyn-dispatched).
 async-trait = "0.1"
 
+# Embedded BitTorrent engine: an in-process librqbit Session drives magnets and
+# .torrent files with no external tools. default-features off drops the bundled
+# http-api/webui/axum surface we don't use; rust-tls keeps the TLS stack on
+# rustls like the rest of moin (no system OpenSSL).
+librqbit = { version = "8", default-features = false, features = ["default-tls"] }
+
 # Download registry + resume state.
 rusqlite = { version = "0.31", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }

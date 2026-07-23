@@ -21,6 +21,7 @@ use super::task::{
     filename_from_url, now_ms, sanitize_filename, Task, TaskKind, TaskProgress, TaskStatus,
 };
 use super::tool::{Aria2Tool, ToolStatus};
+use super::torrent::parse_meta;
 
 /// How the engine reports changes to the outside world (the UI, via Tauri).
 pub trait Emitter: Send + Sync + 'static {
@@ -145,7 +146,7 @@ impl Engine {
             settings.aria2_path.clone(),
         ));
         let backends: Vec<Arc<dyn DownloadBackend>> = vec![
-            Arc::new(EmbeddedBackend::new()),
+            Arc::new(EmbeddedBackend::new(data_dir.clone())),
             Arc::new(Aria2Backend::new(tool.clone())),
         ];
         // Apply the persisted network settings (e.g. connect timeout) to the
@@ -240,6 +241,102 @@ impl Engine {
                 backend: None,
                 category,
                 headers,
+                info_hash: None,
+                torrent_source: None,
+                files: Vec::new(),
+                uploaded: 0,
+                seeders: 0,
+                leechers: 0,
+                peers: 0,
+                up_speed: 0,
+            };
+            tasks.insert(task.id.clone(), Entry::idle(task.clone()));
+            task
+        };
+
+        self.inner.store.lock().unwrap().upsert(&task)?;
+        self.inner.emitter.added(&task);
+        Inner::pump(self.inner.clone());
+        Ok(task)
+    }
+
+    /// Add a torrent from a magnet URI or a local `.torrent` file. `dest` is the
+    /// output *folder* (a torrent is a set of files); librqbit manages its own
+    /// partials + fastresume inside it.
+    pub fn add_torrent(
+        &self,
+        source: String,
+        dir: PathBuf,
+        category: Option<String>,
+    ) -> Result<Task, String> {
+        let source = source.trim().to_string();
+        let meta = parse_meta(&source)?;
+
+        // A real display name if the source carried one, else the info hash, else
+        // a plain fallback — enough for the card to show something immediately.
+        let display = meta
+            .name
+            .as_deref()
+            .and_then(sanitize_filename)
+            .or_else(|| meta.info_hash.clone())
+            .unwrap_or_else(|| "torrent".to_string());
+
+        // Auto-file by the torrent's name when the caller didn't pick a category,
+        // running the same rules a manual add does (tagged as a torrent source).
+        let category = category.or_else(|| {
+            let cand = Candidate::from_url_named(
+                &source,
+                category::AddMethodKind::ManualTorrent,
+                Some(&display),
+            );
+            category::categorize(&cand, &self.inner.categories.lock().unwrap())
+        });
+
+        // Resolve the category: keep only an id that still exists, and honor its
+        // save-folder override for the output dir.
+        let (category, dir) = {
+            let cats = self.inner.categories.lock().unwrap();
+            match category.and_then(|id| cats.iter().find(|c| c.id == id)) {
+                Some(c) => {
+                    let dir = c.save_dir.clone().map(PathBuf::from).unwrap_or(dir);
+                    (Some(c.id.clone()), dir)
+                }
+                None => (None, dir),
+            }
+        };
+
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dest = dir.to_string_lossy().into_owned();
+        let now = now_ms();
+
+        let task = {
+            let mut tasks = self.inner.tasks.lock().unwrap();
+            let task = Task {
+                id: Uuid::new_v4().to_string(),
+                kind: TaskKind::Torrent,
+                url: source,
+                filename: display,
+                dest,
+                status: TaskStatus::Queued,
+                total: None,
+                received: 0,
+                error: None,
+                created_at: now,
+                updated_at: now,
+                completed_at: None,
+                archived: false,
+                active_ms: 0,
+                backend: None,
+                category,
+                headers: BTreeMap::new(),
+                info_hash: meta.info_hash,
+                torrent_source: Some(meta.source),
+                files: Vec::new(),
+                uploaded: 0,
+                seeders: 0,
+                leechers: 0,
+                peers: 0,
+                up_speed: 0,
             };
             tasks.insert(task.id.clone(), Entry::idle(task.clone()));
             task

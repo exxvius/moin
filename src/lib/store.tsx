@@ -126,6 +126,8 @@ interface StoreValue {
   /** Replace the category list (accepts a value or an updater fn). */
   setCategories: Dispatch<SetStateAction<Category[]>>;
   add: (url: string, category?: string | null) => Promise<void>;
+  /** Add a torrent from a magnet URI or a local `.torrent` file path. */
+  addTorrent: (source: string, category?: string | null) => Promise<void>;
   pause: (id: string) => Promise<void>;
   resume: (id: string) => Promise<void>;
   cancel: (id: string) => Promise<void>;
@@ -183,6 +185,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setCategories,
       add: async (url, category) => {
         await api.addDownload(url, category);
+      },
+      addTorrent: async (source, category) => {
+        await api.addTorrent(source, category);
       },
       pause: (id) => api.pauseDownload(id),
       resume: (id) => api.resumeDownload(id),
