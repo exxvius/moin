@@ -5,6 +5,7 @@ import {
   ArrowUp,
   Scale,
   Info,
+  List,
   Radio,
   Users,
   Sprout,
@@ -39,10 +40,11 @@ interface Props {
   speed: number;
 }
 
-type Tab = "general" | "content" | "peers" | "trackers";
+type Tab = "general" | "details" | "content" | "peers" | "trackers";
 
 const TABS: { id: Tab; label: string; icon: typeof Info }[] = [
   { id: "general", label: "General", icon: Info },
+  { id: "details", label: "Details", icon: List },
   { id: "content", label: "Content", icon: Files },
   { id: "peers", label: "Peers", icon: Users },
   { id: "trackers", label: "Trackers", icon: Radio },
@@ -158,6 +160,7 @@ export function TorrentDetail({ task, speed }: Props) {
         {tab === "general" && (
           <GeneralTab task={task} speed={speed} details={details} />
         )}
+        {tab === "details" && <DetailsTab task={task} />}
         {tab === "content" && (
           <ContentTab
             dest={task.dest}
@@ -247,6 +250,35 @@ function GeneralTab({
   const done = task.status === "completed" || seeding;
   return (
     <div className="tg">
+      {details && details.pieces.length > 0 && (
+        <div className="tg-pieces-block top">
+          <div className="tg-pieces-head">
+            <span>Pieces</span>
+            <span className="dim">
+              {details.availability.toFixed(3)} availability
+            </span>
+          </div>
+          <PieceBar pieces={details.pieces} />
+        </div>
+      )}
+
+      <div className="tg-progress">
+        <div className="tg-progress-head">
+          <span className="tg-progress-bytes">
+            {formatBytes(task.received)}
+            <span className="dim">
+              {task.total != null ? ` of ${formatBytes(task.total)}` : ""}
+            </span>
+          </span>
+          <span className="tg-progress-pct">
+            {pct != null ? `${Math.round(pct)}%` : ""}
+          </span>
+        </div>
+        <span className={`td-bar big${done ? " done" : ""}`} style={{ ["--p" as string]: (pct ?? 0) / 100 }}>
+          <i />
+        </span>
+      </div>
+
       <div className="tg-tiles">
         <Tile
           icon={ArrowDown}
@@ -279,38 +311,17 @@ function GeneralTab({
           value={live ? formatEta(remaining, speed) : "—"}
         />
       </div>
+    </div>
+  );
+}
 
-      <div className="tg-progress">
-        <div className="tg-progress-head">
-          <span className="tg-progress-bytes">
-            {formatBytes(task.received)}
-            <span className="dim">
-              {task.total != null ? ` of ${formatBytes(task.total)}` : ""}
-            </span>
-          </span>
-          <span className="tg-progress-pct">
-            {pct != null ? `${Math.round(pct)}%` : ""}
-          </span>
-        </div>
-        <span className={`td-bar big${done ? " done" : ""}`} style={{ ["--p" as string]: (pct ?? 0) / 100 }}>
-          <i />
-        </span>
-      </div>
-
-      {details && details.pieces.length > 0 && (
-        <div className="tg-pieces-block">
-          <div className="tg-pieces-head">
-            <span>Pieces</span>
-            <span className="dim">
-              {details.availability.toFixed(3)} availability
-            </span>
-          </div>
-          <PieceBar pieces={details.pieces} />
-        </div>
-      )}
-
+/** The Details tab: the textual facts about a torrent that used to sit at the
+ *  bottom of General (upload/leechers/time/paths/hash/error). */
+function DetailsTab({ task }: { task: Task }) {
+  return (
+    <div className="tg">
       <div className="tg-list">
-        <DetailRow k="Uploaded">{formatBytes(uploaded)}</DetailRow>
+        <DetailRow k="Uploaded">{formatBytes(task.uploaded ?? 0)}</DetailRow>
         <DetailRow k="Leechers">{task.leechers ?? 0}</DetailRow>
         <DetailRow k="Time active">{formatDuration(task.active_ms)}</DetailRow>
         <DetailRow k="Files">{task.files?.length ?? 0}</DetailRow>

@@ -839,7 +839,7 @@
 /* A full-width tab strip split into four equal segments. */
 .td-tabs {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   border-bottom: 1px solid
     color-mix(in oklab, var(--glass-border) 75%, transparent);
 }
@@ -1171,10 +1171,15 @@
 }
 
 .tg-progress {
-  margin-top: var(--space-5);
+  margin-top: var(--space-4);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+/* Tiles come last in the General tab now, so they need the gap the progress block
+   used to carry at the top. */
+.tg-tiles {
+  margin-top: var(--space-4);
 }
 .tg-progress-head {
   display: flex;
@@ -1195,6 +1200,10 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+/* When the pieces block leads the General tab, it sits flush at the panel top. */
+.tg-pieces-block.top {
+  margin-top: 0;
 }
 .tg-pieces-head {
   display: flex;
