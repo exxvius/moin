@@ -11,10 +11,12 @@
 //!
 //! For **torrents**, aria2 writes the real files straight into the task's output
 //! folder (no `.part`), seeds with the configured ratio/time limits, and reports a
-//! swarm tick (up-speed, peers, seeders/leechers). Metadata resolution and the live
-//! detail panel stay with the built-in engine — aria2 downloads from the `.torrent`
-//! the embedded backend already resolved and cached.
+//! swarm tick plus a full live detail panel (files, peers, trackers, piece map,
+//! availability) + live file re-selection and rate caps — parity with the built-in
+//! engine. Only metadata resolution + the `.torrent` cache stay with the built-in
+//! engine; aria2 downloads from the file it already resolved.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -24,13 +26,14 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 use super::backend::{
-    Control, DownloadBackend, Outcome, ProgressFn, Signal, TorrentNet, TorrentTick, TransferOpts,
+    Control, DownloadBackend, NetConfig, Outcome, ProgressFn, Signal, TorrentNet, TorrentTick,
+    TransferOpts,
 };
 use super::fsattr;
 use super::http;
-use super::task::{Task, TaskKind, TaskStatus};
+use super::task::{PeerInfo, Task, TaskKind, TaskStatus, TorrentDetails, TorrentFile};
 use super::tool::{new_command, Aria2Tool};
-use super::torrent::meta_path;
+use super::torrent::{bucket_haves, distributed_copies, meta_path};
 
 /// How often we poll aria2 for a task's progress.
 const POLL: Duration = Duration::from_millis(300);
@@ -42,8 +45,16 @@ pub struct Aria2Backend {
     /// Where the embedded engine caches resolved `.torrent` files — aria2 reads
     /// them to add a torrent without re-resolving a magnet from the swarm.
     data_dir: PathBuf,
-    /// Latest torrent rate caps (from settings); applied per torrent download.
+    /// Latest torrent rate caps (from settings); applied per torrent download and
+    /// pushed live to running torrents when settings change.
     net: StdMutex<TorrentNet>,
+    /// Active torrents, info hash (lowercase hex) → aria2 GID, so the detail panel
+    /// and live file/rate changes can find the download aria2 assigned.
+    torrents: StdMutex<HashMap<String, String>>,
+    /// A synchronously-readable copy of the current RPC handle (updated whenever the
+    /// daemon (re)spawns), so `reconfigure` — a sync `&self` call — can push live
+    /// rate changes to running torrents without touching the async daemon lock.
+    last_rpc: StdMutex<Option<Rpc>>,
     daemon: Mutex<Option<Daemon>>,
 }
 
@@ -67,8 +78,19 @@ impl Aria2Backend {
             tool,
             data_dir,
             net: StdMutex::new(default_net()),
+            torrents: StdMutex::new(HashMap::new()),
+            last_rpc: StdMutex::new(None),
             daemon: Mutex::new(None),
         }
+    }
+
+    /// The aria2 GID a torrent's download runs under, by info hash (lowercase hex).
+    fn gid_for(&self, info_hash: &str) -> Option<String> {
+        self.torrents
+            .lock()
+            .unwrap()
+            .get(&info_hash.to_ascii_lowercase())
+            .cloned()
     }
 
     /// Return a live RPC handle, (re)spawning the daemon if it isn't running.
@@ -92,6 +114,7 @@ impl Aria2Backend {
         let daemon = spawn_daemon(&bin).await?;
         let rpc = daemon.rpc.clone();
         *guard = Some(daemon);
+        *self.last_rpc.lock().unwrap() = Some(rpc.clone());
         Ok(rpc)
     }
 }
@@ -115,10 +138,40 @@ impl DownloadBackend for Aria2Backend {
         self.tool.is_available()
     }
 
-    fn reconfigure(&self, net: super::backend::NetConfig) {
-        // aria2 builds its own client per RPC call, so only the torrent rate caps
-        // matter here; they're read when a torrent download is added.
+    fn reconfigure(&self, net: NetConfig) {
+        // Store the caps for the next add, and push them live to every running
+        // torrent so a rate change takes effect without re-adding (matches the
+        // built-in engine's live session ratelimits).
         *self.net.lock().unwrap() = net.torrent;
+        let gids: Vec<String> = self.torrents.lock().unwrap().values().cloned().collect();
+        let rpc = self.last_rpc.lock().unwrap().clone();
+        let (Some(rpc), false) = (rpc, gids.is_empty()) else {
+            return;
+        };
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let caps = net.torrent;
+            handle.spawn(async move {
+                for gid in gids {
+                    let opts = json!({
+                        "max-download-limit": limit_str(caps.download_bps),
+                        "max-upload-limit": limit_str(caps.upload_bps),
+                    });
+                    let _ = rpc.call("aria2.changeOption", vec![json!(gid), opts]).await;
+                }
+            });
+        }
+    }
+
+    async fn torrent_details(&self, info_hash: &str) -> Option<Result<TorrentDetails, String>> {
+        Some(self.details(info_hash).await)
+    }
+
+    async fn set_torrent_files(
+        &self,
+        info_hash: &str,
+        selected: &[usize],
+    ) -> Option<Result<(), String>> {
+        Some(self.set_files(info_hash, selected).await)
     }
 
     async fn run(
@@ -292,7 +345,17 @@ impl Aria2Backend {
             Err(e) => return Outcome::Failed(format!("aria2 couldn't add the torrent: {e}")),
         };
 
-        poll_torrent(&rpc, &gid, &control, &progress).await
+        // Register the GID so the detail panel + live file/rate changes can find it,
+        // and clear it however this run ends.
+        let hash = task.info_hash.as_ref().map(|h| h.to_ascii_lowercase());
+        if let Some(h) = &hash {
+            self.torrents.lock().unwrap().insert(h.clone(), gid.clone());
+        }
+        let outcome = poll_torrent(&rpc, &gid, &control, &progress).await;
+        if let Some(h) = &hash {
+            self.torrents.lock().unwrap().remove(h);
+        }
+        outcome
     }
 
     /// The `.torrent` bytes for a task: the embedded engine's cached copy first
@@ -307,6 +370,79 @@ impl Aria2Backend {
             return tokio::fs::read(&task.url).await.ok();
         }
         None
+    }
+
+    /// Live detail for an active aria2 torrent: files (with progress + selection),
+    /// connected peers, trackers, the piece-have bar, and swarm availability — the
+    /// same shape the built-in engine reports, assembled from aria2's RPC.
+    async fn details(&self, info_hash: &str) -> Result<TorrentDetails, String> {
+        let gid = self
+            .gid_for(info_hash)
+            .ok_or_else(|| "torrent isn't active".to_string())?;
+        let rpc = self.rpc().await?;
+
+        let status = rpc
+            .call(
+                "aria2.tellStatus",
+                vec![
+                    json!(gid),
+                    json!(["bitfield", "numPieces", "bittorrent", "dir"]),
+                ],
+            )
+            .await?;
+        let files_raw = rpc.call("aria2.getFiles", vec![json!(gid)]).await?;
+        // getPeers fails for a metadata-only phase; treat that as "no peers yet".
+        let peers_raw = rpc
+            .call("aria2.getPeers", vec![json!(gid)])
+            .await
+            .unwrap_or(Value::Null);
+
+        let dir = status.get("dir").and_then(Value::as_str).unwrap_or("");
+        let files = build_files(&files_raw, dir);
+        let (peers, peer_bitfields) = build_peers(&peers_raw);
+        let trackers = build_trackers(&status);
+
+        let total_pieces = num(&status, "numPieces") as usize;
+        let have = status
+            .get("bitfield")
+            .and_then(Value::as_str)
+            .map(hex_to_bytes)
+            .unwrap_or_default();
+        let pieces = bucket_haves(&have, total_pieces);
+        let avail = piece_availability(&peer_bitfields, total_pieces);
+        let availability = distributed_copies(&avail, &have, total_pieces);
+
+        Ok(TorrentDetails {
+            files,
+            peers,
+            trackers,
+            pieces,
+            availability,
+        })
+    }
+
+    /// Change which files an active aria2 torrent downloads, live, via aria2's
+    /// `select-file` (1-based indices). An empty selection leaves it unchanged —
+    /// aria2 can't have zero selected files.
+    async fn set_files(&self, info_hash: &str, selected: &[usize]) -> Result<(), String> {
+        if selected.is_empty() {
+            return Ok(());
+        }
+        let gid = self
+            .gid_for(info_hash)
+            .ok_or_else(|| "torrent isn't active".to_string())?;
+        let rpc = self.rpc().await?;
+        let list = selected
+            .iter()
+            .map(|i| (i + 1).to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        rpc.call(
+            "aria2.changeOption",
+            vec![json!(gid), json!({ "select-file": list })],
+        )
+        .await?;
+        Ok(())
     }
 }
 
@@ -438,6 +574,122 @@ fn default_net() -> TorrentNet {
         download_bps: None,
         upload_bps: None,
     }
+}
+
+/// A rate cap as aria2's `max-*-limit` wants it: the byte count, or `"0"` (aria2's
+/// "no limit") when unset.
+fn limit_str(bps: Option<std::num::NonZeroU32>) -> String {
+    bps.map(|b| b.get().to_string())
+        .unwrap_or_else(|| "0".to_string())
+}
+
+/// Parse aria2's hex bitfield string into raw bytes (big-endian, Msb0 — the same
+/// layout the piece-bar helpers expect).
+fn hex_to_bytes(s: &str) -> Vec<u8> {
+    (0..s.len() / 2)
+        .filter_map(|i| u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok())
+        .collect()
+}
+
+/// Build the file model from aria2's `getFiles`, making each path relative to the
+/// torrent's output folder (aria2 reports absolute paths).
+fn build_files(v: &Value, dir: &str) -> Vec<TorrentFile> {
+    // Normalize separators before stripping — aria2 can report the dir and the file
+    // path with different slashes on Windows, which would defeat a raw prefix match.
+    let dir = dir.replace('\\', "/");
+    v.as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|f| {
+                    let abs = f
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .replace('\\', "/");
+                    let rel = abs
+                        .strip_prefix(&dir)
+                        .unwrap_or(&abs)
+                        .trim_start_matches('/')
+                        .to_string();
+                    TorrentFile {
+                        path: rel,
+                        size: num(f, "length"),
+                        selected: f.get("selected").and_then(Value::as_str) == Some("true"),
+                        received: num(f, "completedLength"),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Build the peer list from aria2's `getPeers`, returning the display rows and each
+/// peer's have-bitfield (used to compute swarm availability).
+fn build_peers(v: &Value) -> (Vec<PeerInfo>, Vec<Vec<u8>>) {
+    let mut peers = Vec::new();
+    let mut bitfields = Vec::new();
+    let Some(arr) = v.as_array() else {
+        return (peers, bitfields);
+    };
+    for p in arr {
+        let ip = p.get("ip").and_then(Value::as_str).unwrap_or("");
+        let port = p.get("port").and_then(Value::as_str).unwrap_or("");
+        let is_seed = p.get("seeder").and_then(Value::as_str) == Some("true");
+        let choking = p.get("peerChoking").and_then(Value::as_str) == Some("true");
+        let state = if is_seed {
+            "seed"
+        } else if choking {
+            "choked"
+        } else {
+            "active"
+        };
+        peers.push(PeerInfo {
+            addr: format!("{ip}:{port}"),
+            state: state.to_string(),
+            // aria2 doesn't expose per-peer total bytes over RPC, only live speed.
+            downloaded: 0,
+        });
+        if let Some(bf) = p.get("bitfield").and_then(Value::as_str) {
+            bitfields.push(hex_to_bytes(bf));
+        }
+    }
+    (peers, bitfields)
+}
+
+/// Flatten a torrent's announce list (from `tellStatus`'s `bittorrent.announceList`)
+/// into a sorted, de-duplicated tracker URL list.
+fn build_trackers(status: &Value) -> Vec<String> {
+    let mut trackers: Vec<String> = status
+        .get("bittorrent")
+        .and_then(|b| b.get("announceList"))
+        .and_then(Value::as_array)
+        .map(|tiers| {
+            tiers
+                .iter()
+                .filter_map(Value::as_array)
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    trackers.sort();
+    trackers.dedup();
+    trackers
+}
+
+/// Per-piece availability across the connected peers: how many hold each piece.
+/// Feeds [`distributed_copies`] for the swarm "availability" figure.
+fn piece_availability(bitfields: &[Vec<u8>], total: usize) -> Vec<u32> {
+    let mut avail = vec![0u32; total];
+    for bf in bitfields {
+        for (i, a) in avail.iter_mut().enumerate() {
+            if super::torrent::have_bit(bf, i) {
+                *a += 1;
+            }
+        }
+    }
+    avail
 }
 
 /// Drive one aria2 GID to a terminal [`Outcome`], reporting progress and honoring
