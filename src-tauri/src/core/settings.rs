@@ -24,6 +24,11 @@ const DEFAULT_RPC_PORT: u16 = 47653;
 const DEFAULT_SEED_RATIO_LIMIT: f64 = 0.0;
 /// Seed for at most this many minutes after finishing, then stop. 0 = forever.
 const DEFAULT_SEED_TIME_LIMIT_MINS: u64 = 0;
+/// TCP port the torrent engine starts listening on for incoming peers. A small
+/// range from here is tried so a busy port falls through to the next.
+const DEFAULT_TORRENT_LISTEN_PORT: u16 = 4240;
+/// Torrent up/download rate caps in bytes per second. 0 = unlimited.
+const DEFAULT_TORRENT_RATE_LIMIT: u64 = 0;
 
 /// What happens to a download's file when it's moved to a different category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -92,6 +97,27 @@ pub struct Settings {
     /// means no time limit. Whichever of ratio/time is hit first stops seeding.
     #[serde(default = "default_seed_time_limit_mins")]
     pub seed_time_limit_mins: u64,
+    /// TCP port the torrent engine listens on for incoming peers (a small range
+    /// from here is tried so a busy port falls through). Applied on the next app
+    /// start — the shared session binds its port once at build.
+    #[serde(default = "default_torrent_listen_port")]
+    pub torrent_listen_port: u16,
+    /// Whether the torrent engine runs the DHT (finds peers without a tracker).
+    /// Applied on the next app start.
+    #[serde(default = "default_true")]
+    pub torrent_dht: bool,
+    /// Whether the torrent engine asks the router to forward its listen port
+    /// (UPnP / NAT-PMP), which helps peers reach you. Applied on the next start.
+    #[serde(default = "default_true")]
+    pub torrent_upnp: bool,
+    /// Cap torrent download speed to this many bytes per second. 0 = unlimited.
+    /// Applies live (no restart needed).
+    #[serde(default = "default_torrent_rate_limit")]
+    pub torrent_download_limit: u64,
+    /// Cap torrent upload speed to this many bytes per second. 0 = unlimited.
+    /// Applies live (no restart needed).
+    #[serde(default = "default_torrent_rate_limit")]
+    pub torrent_upload_limit: u64,
     /// Bearer token the extension must present on `/add`. Generated on first run
     /// (see `Engine::new`) and read live, so regenerating it takes effect at once.
     #[serde(default)]
@@ -130,6 +156,18 @@ fn default_seed_time_limit_mins() -> u64 {
     DEFAULT_SEED_TIME_LIMIT_MINS
 }
 
+fn default_torrent_listen_port() -> u16 {
+    DEFAULT_TORRENT_LISTEN_PORT
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_torrent_rate_limit() -> u64 {
+    DEFAULT_TORRENT_RATE_LIMIT
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -149,6 +187,11 @@ impl Default for Settings {
             rpc_token: String::new(),
             seed_ratio_limit: DEFAULT_SEED_RATIO_LIMIT,
             seed_time_limit_mins: DEFAULT_SEED_TIME_LIMIT_MINS,
+            torrent_listen_port: DEFAULT_TORRENT_LISTEN_PORT,
+            torrent_dht: true,
+            torrent_upnp: true,
+            torrent_download_limit: DEFAULT_TORRENT_RATE_LIMIT,
+            torrent_upload_limit: DEFAULT_TORRENT_RATE_LIMIT,
         }
     }
 }

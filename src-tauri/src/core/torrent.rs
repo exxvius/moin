@@ -7,16 +7,16 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use librqbit::{
-    torrent_from_bytes, AddTorrent, AddTorrentOptions, AddTorrentResponse, ByteBufOwned, Magnet,
-    Session, SessionOptions, TorrentMetaV1Info,
+    limits::LimitsConfig, torrent_from_bytes, AddTorrent, AddTorrentOptions, AddTorrentResponse,
+    ByteBufOwned, Magnet, Session, SessionOptions, TorrentMetaV1Info,
 };
 use tokio::sync::OnceCell;
 
-use super::backend::{Control, Outcome, ProgressFn, Signal, TorrentTick, TransferOpts};
+use super::backend::{Control, Outcome, ProgressFn, Signal, TorrentNet, TorrentTick, TransferOpts};
 use super::task::{
     PeerInfo, ResolvedTorrent, Task, TaskStatus, TorrentDetails, TorrentFile, TorrentSource,
 };
@@ -40,17 +40,32 @@ impl Drop for AbortGuard {
     }
 }
 
-/// Default range of TCP ports to accept incoming peers on. A configurable listen
-/// port is a later milestone; a fixed range here just means the swarm can reach
-/// us, which materially helps download speed.
-const LISTEN_PORTS: std::ops::Range<u16> = 4240..4260;
+/// How many ports past the configured listen port to try if it's busy, so a
+/// taken port falls through to a neighbour instead of failing the whole session.
+const LISTEN_PORT_SPAN: u16 = 20;
+
+/// The config a session builds with before the engine's real settings are pushed
+/// in (which happens at startup, before any torrent runs). Mirrors the settings
+/// defaults so a session built without a reconfigure still behaves sensibly.
+fn default_net() -> TorrentNet {
+    TorrentNet {
+        listen_port: 4240,
+        dht: true,
+        upnp: true,
+        download_bps: None,
+        upload_bps: None,
+    }
+}
 
 /// Owns the lazily-built shared session. Building a session binds a listen port
 /// and starts DHT, so it's deferred until the first torrent actually needs it —
-/// users who only ever download over HTTP never pay for it.
+/// users who only ever download over HTTP never pay for it. The current network
+/// config is held behind a mutex: it's read when the session is built (port /
+/// DHT / UPnP) and pushed live to a running session (rate caps).
 pub struct TorrentEngine {
     data_dir: PathBuf,
     session: OnceCell<Arc<Session>>,
+    net: Mutex<TorrentNet>,
 }
 
 impl TorrentEngine {
@@ -58,6 +73,18 @@ impl TorrentEngine {
         Self {
             data_dir,
             session: OnceCell::new(),
+            net: Mutex::new(default_net()),
+        }
+    }
+
+    /// Apply changed network settings. Rate caps take effect immediately on a
+    /// running session; the listen port, DHT, and UPnP toggles are baked when the
+    /// session is built, so a change to those lands on the next app start.
+    pub fn reconfigure(&self, net: TorrentNet) {
+        *self.net.lock().unwrap() = net;
+        if let Some(session) = self.session.get() {
+            session.ratelimits.set_download_bps(net.download_bps);
+            session.ratelimits.set_upload_bps(net.upload_bps);
         }
     }
 
@@ -67,10 +94,18 @@ impl TorrentEngine {
         self.session
             .get_or_try_init(|| async {
                 let store_dir = self.data_dir.join("torrent");
+                let net = *self.net.lock().unwrap();
+                let start = net.listen_port.max(1);
                 let opts = SessionOptions {
                     // Restore piece state quickly after a restart / resume.
                     fastresume: true,
-                    listen_port_range: Some(LISTEN_PORTS),
+                    listen_port_range: Some(start..start.saturating_add(LISTEN_PORT_SPAN)),
+                    disable_dht: !net.dht,
+                    enable_upnp_port_forwarding: net.upnp,
+                    ratelimits: LimitsConfig {
+                        download_bps: net.download_bps,
+                        upload_bps: net.upload_bps,
+                    },
                     ..Default::default()
                 };
                 // The default output folder is always overridden per task; it just

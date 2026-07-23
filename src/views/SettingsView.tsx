@@ -34,6 +34,10 @@ const CONNECT_OPTIONS = [5, 10, 15, 30, 60, 0];
 const SEED_RATIO_OPTIONS = [0, 0.5, 1, 1.5, 2, 3, 5];
 // Minutes to keep seeding after finishing, then stop; 0 = no time limit.
 const SEED_TIME_OPTIONS = [0, 30, 60, 120, 360, 720, 1440];
+// Torrent up/download rate caps in bytes/sec; 0 = unlimited.
+const RATE_LIMIT_OPTIONS = [0, 64, 128, 256, 512, 1024, 2048, 5120, 10240, 20480].map(
+  (kib) => kib * 1024,
+);
 
 /** "30 minutes" / "6 hours" / "1 day" for a whole number of minutes. */
 function minutesLabel(n: number): string {
@@ -73,6 +77,8 @@ export function SettingsView({
   const [toolError, setToolError] = useState<string | null>(null);
   // Local draft for the RPC port so we commit on blur, not on every keystroke.
   const [portDraft, setPortDraft] = useState("");
+  // Same, for the torrent listen port.
+  const [torrentPortDraft, setTorrentPortDraft] = useState("");
   const [tokenCopied, setTokenCopied] = useState(false);
 
   useEffect(() => {
@@ -85,6 +91,10 @@ export function SettingsView({
   useEffect(() => {
     if (settings) setPortDraft(String(settings.rpc_port));
   }, [settings?.rpc_port]);
+
+  useEffect(() => {
+    if (settings) setTorrentPortDraft(String(settings.torrent_listen_port));
+  }, [settings?.torrent_listen_port]);
 
   const patch = (change: Partial<Settings>) => {
     setSettings((prev) => {
@@ -153,6 +163,16 @@ export function SettingsView({
     }
   };
 
+  // Same as the RPC port: only commit a valid TCP port, else snap back.
+  const commitTorrentPort = () => {
+    const n = Number(torrentPortDraft);
+    if (Number.isInteger(n) && n >= 1 && n <= 65535) {
+      if (n !== settings?.torrent_listen_port) patch({ torrent_listen_port: n });
+    } else {
+      setTorrentPortDraft(String(settings?.torrent_listen_port ?? 4240));
+    }
+  };
+
   const regenerateToken = async () => {
     try {
       const token = await api.regenerateRpcToken();
@@ -175,11 +195,17 @@ export function SettingsView({
   };
 
   const httpEngine = settings?.http_backend ?? "embedded";
+  const torrentEngine = settings?.torrent_backend ?? "embedded";
 
   // Engine choices: HTTP-capable backends, offering aria2c only once it's usable
   // (but always keeping the current pick so the value resolves).
   const engineOptions = backends
     .filter((b) => b.http && (b.available || b.id === httpEngine))
+    .map((b) => ({ value: b.id, label: b.label }));
+
+  // Same shape for torrent-capable backends (aria2c joins once it's installed).
+  const torrentEngineOptions = backends
+    .filter((b) => b.torrent && (b.available || b.id === torrentEngine))
     .map((b) => ({ value: b.id, label: b.label }));
 
   return (
@@ -374,6 +400,127 @@ export function SettingsView({
 
       <div className="card">
         <div className="card-title">Torrents</div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Torrent engine</div>
+            <div className="dim">
+              The built-in engine needs no setup. aria2c is an external downloader
+              you can switch to once it's installed below.
+            </div>
+          </div>
+          <Select
+            value={torrentEngine}
+            ariaLabel="Torrent engine"
+            caret
+            disabled={!settings || torrentEngineOptions.length < 2}
+            onChange={(v) => patch({ torrent_backend: v })}
+            options={
+              torrentEngineOptions.length > 0
+                ? torrentEngineOptions
+                : [{ value: "embedded", label: "Built-in" }]
+            }
+          />
+        </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Download limit</div>
+            <div className="dim">
+              Cap how fast torrents download, across all of them. Set to Unlimited
+              for no cap. Takes effect right away.
+            </div>
+          </div>
+          <Select
+            value={String(settings?.torrent_download_limit ?? 0)}
+            ariaLabel="Torrent download limit"
+            caret
+            disabled={!settings}
+            onChange={(v) => patch({ torrent_download_limit: Number(v) })}
+            options={RATE_LIMIT_OPTIONS.map((n) => ({
+              value: String(n),
+              label: n === 0 ? "Unlimited" : `${formatBytes(n)}/s`,
+            }))}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Upload limit</div>
+            <div className="dim">
+              Cap how fast torrents upload to peers. A limit here also slows how
+              quickly you reach a seed ratio. Takes effect right away.
+            </div>
+          </div>
+          <Select
+            value={String(settings?.torrent_upload_limit ?? 0)}
+            ariaLabel="Torrent upload limit"
+            caret
+            disabled={!settings}
+            onChange={(v) => patch({ torrent_upload_limit: Number(v) })}
+            options={RATE_LIMIT_OPTIONS.map((n) => ({
+              value: String(n),
+              label: n === 0 ? "Unlimited" : `${formatBytes(n)}/s`,
+            }))}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Listen port</div>
+            <div className="dim">
+              The port moin accepts incoming peer connections on. Forwarding it on
+              your router (or leaving UPnP on below) helps peers reach you. Applies
+              after a restart.
+            </div>
+          </div>
+          <input
+            className="add-input selectable port-input"
+            type="number"
+            min={1}
+            max={65535}
+            value={torrentPortDraft}
+            aria-label="Torrent listen port"
+            disabled={!settings}
+            onChange={(e) => setTorrentPortDraft(e.target.value)}
+            onBlur={commitTorrentPort}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+            }}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Peer discovery (DHT)</div>
+            <div className="dim">
+              Find peers without a tracker using the distributed hash table. Leave
+              it on unless you only use private trackers. Applies after a restart.
+            </div>
+          </div>
+          <Switch
+            checked={settings?.torrent_dht ?? true}
+            ariaLabel="Peer discovery (DHT)"
+            disabled={!settings}
+            onChange={(v) => patch({ torrent_dht: v })}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Forward my port (UPnP)</div>
+            <div className="dim">
+              Ask your router to open the listen port automatically (UPnP /
+              NAT-PMP), so more peers can connect. Applies after a restart.
+            </div>
+          </div>
+          <Switch
+            checked={settings?.torrent_upnp ?? true}
+            ariaLabel="Forward my port (UPnP)"
+            disabled={!settings}
+            onChange={(v) => patch({ torrent_upnp: v })}
+          />
+        </div>
 
         <div className="setting-row">
           <div>

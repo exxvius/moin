@@ -55,6 +55,7 @@ impl DownloadBackend for EmbeddedBackend {
 
     fn reconfigure(&self, net: NetConfig) {
         *self.client.lock().unwrap() = build_client(net.connect_timeout);
+        self.torrent.reconfigure(net.torrent);
     }
 
     async fn resolve_torrent(&self, source: &str) -> Option<Result<ResolvedTorrent, String>> {
@@ -104,7 +105,11 @@ impl DownloadBackend for EmbeddedBackend {
                 )
                 .await
             }
-            TaskKind::Torrent => self.torrent.download(&task, &opts, &control, &progress).await,
+            TaskKind::Torrent => {
+                self.torrent
+                    .download(&task, &opts, &control, &progress)
+                    .await
+            }
             _ => Outcome::Failed("the built-in backend can't handle this source yet".to_string()),
         }
     }

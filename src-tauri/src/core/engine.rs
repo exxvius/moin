@@ -11,8 +11,8 @@ use uuid::Uuid;
 
 use super::aria2::Aria2Backend;
 use super::backend::{
-    BackendInfo, Control, DownloadBackend, NetConfig, Outcome, ProgressFn, Signal, TorrentTick,
-    TransferOpts,
+    BackendInfo, Control, DownloadBackend, NetConfig, Outcome, ProgressFn, Signal, TorrentNet,
+    TorrentTick, TransferOpts,
 };
 use super::category::{self, Candidate, Category};
 use super::embedded::EmbeddedBackend;
@@ -1231,9 +1231,7 @@ impl Inner {
                     }
                     // A torrent reports its own phase (Checking/Downloading/Seeding);
                     // HTTP is always Downloading while bytes flow.
-                    let status = torrent
-                        .map(|t| t.status)
-                        .unwrap_or(TaskStatus::Downloading);
+                    let status = torrent.map(|t| t.status).unwrap_or(TaskStatus::Downloading);
 
                     let newly_started = !st.started;
                     if newly_started {
@@ -2076,7 +2074,20 @@ fn net_config(s: &Settings) -> NetConfig {
     NetConfig {
         connect_timeout: (s.connect_timeout_secs > 0)
             .then(|| Duration::from_secs(s.connect_timeout_secs)),
+        torrent: TorrentNet {
+            listen_port: s.torrent_listen_port,
+            dht: s.torrent_dht,
+            upnp: s.torrent_upnp,
+            download_bps: bps(s.torrent_download_limit),
+            upload_bps: bps(s.torrent_upload_limit),
+        },
     }
+}
+
+/// A bytes-per-second rate limit as librqbit wants it: `None` for 0/unlimited,
+/// else the value clamped into a `NonZeroU32` (u32 caps out around 4 GB/s).
+fn bps(bytes_per_sec: u64) -> Option<std::num::NonZeroU32> {
+    std::num::NonZeroU32::new(bytes_per_sec.min(u32::MAX as u64) as u32)
 }
 
 /// Emit a `Moving` progress tick so the card's bar tracks the relocation.

@@ -147,6 +147,16 @@ export interface Settings {
   seed_ratio_limit: number;
   /** Stop seeding a torrent this many minutes after it finishes. 0 = no limit. */
   seed_time_limit_mins: number;
+  /** TCP port the torrent engine listens on for peers. Applied on next start. */
+  torrent_listen_port: number;
+  /** Whether the torrent DHT runs (peer discovery without a tracker). Next start. */
+  torrent_dht: boolean;
+  /** Whether UPnP/NAT-PMP port forwarding is attempted. Applied on next start. */
+  torrent_upnp: boolean;
+  /** Torrent download cap in bytes/sec, 0 = unlimited. Applies live. */
+  torrent_download_limit: number;
+  /** Torrent upload cap in bytes/sec, 0 = unlimited. Applies live. */
+  torrent_upload_limit: number;
 }
 
 export interface BackendInfo {

@@ -71,11 +71,31 @@ pub struct TransferOpts {
 
 /// Network settings a backend applies to its client, refreshed when settings
 /// change. Backends that build their own client (the embedded one) act on it;
-/// others ignore it.
+/// others ignore it. Carries the torrent knobs too — the embedded backend forwards
+/// them to its session (rate caps live, the rest on next session build).
 #[derive(Debug, Clone, Copy)]
 pub struct NetConfig {
     /// Max time to establish a connection, or `None` for the OS default.
     pub connect_timeout: Option<Duration>,
+    /// Torrent-engine tuning: listen port, DHT/UPnP, and up/down rate caps.
+    pub torrent: TorrentNet,
+}
+
+/// Torrent-engine network settings. The port/DHT/UPnP fields are read when the
+/// shared session is (lazily) built, so a change takes effect on the next start;
+/// the rate caps apply live to a running session.
+#[derive(Debug, Clone, Copy)]
+pub struct TorrentNet {
+    /// First TCP port to try binding for incoming peers (a small range follows).
+    pub listen_port: u16,
+    /// Whether the DHT runs.
+    pub dht: bool,
+    /// Whether UPnP / NAT-PMP port forwarding is attempted.
+    pub upnp: bool,
+    /// Download cap in bytes/sec, or `None` for unlimited.
+    pub download_bps: Option<std::num::NonZeroU32>,
+    /// Upload cap in bytes/sec, or `None` for unlimited.
+    pub upload_bps: Option<std::num::NonZeroU32>,
 }
 
 /// How a transfer ended. The supervisor maps this onto a [`TaskStatus`].
