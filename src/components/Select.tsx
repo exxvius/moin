@@ -39,6 +39,7 @@ export function Select({
 }: Props) {
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState<DOMRect | null>(null);
+  const [placement, setPlacement] = useState<"down" | "up">("down");
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLUListElement>(null);
 
@@ -46,6 +47,19 @@ export function Select({
     if (open && triggerRef.current)
       setRect(triggerRef.current.getBoundingClientRect());
   }, [open]);
+
+  // Once the menu is measured, open it upward instead of down when it would
+  // otherwise run off the bottom of the window and there's more room above.
+  useLayoutEffect(() => {
+    if (!open || !rect || !menuRef.current) return;
+    const margin = 8;
+    const menuHeight = menuRef.current.offsetHeight;
+    const spaceBelow = window.innerHeight - rect.bottom - margin;
+    const spaceAbove = rect.top - margin;
+    setPlacement(
+      menuHeight > spaceBelow && spaceAbove > spaceBelow ? "up" : "down",
+    );
+  }, [open, rect, options.length]);
 
   useEffect(() => {
     if (!open) return;
@@ -80,12 +94,16 @@ export function Select({
   let menuStyle: CSSProperties = {};
   if (rect) {
     const width = Math.max(rect.width, 210);
-    menuStyle = {
-      position: "fixed",
-      top: rect.bottom + 6,
-      left: Math.max(8, rect.right - width),
-      width,
-    };
+    const left = Math.max(8, rect.right - width);
+    menuStyle =
+      placement === "up"
+        ? {
+            position: "fixed",
+            bottom: window.innerHeight - rect.top + 6,
+            left,
+            width,
+          }
+        : { position: "fixed", top: rect.bottom + 6, left, width };
   }
 
   return (
