@@ -39,7 +39,8 @@ impl Store {
                  info_hash      TEXT,
                  torrent_source TEXT,
                  uploaded       INTEGER NOT NULL DEFAULT 0,
-                 torrent_files  TEXT
+                 torrent_files  TEXT,
+                 own_dir        INTEGER NOT NULL DEFAULT 0
              );",
         )
         .map_err(err)?;
@@ -63,6 +64,10 @@ impl Store {
             [],
         );
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN torrent_files TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE tasks ADD COLUMN own_dir INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
         // Backfill a completion time for rows finished before this column existed.
         let _ = conn.execute(
             "UPDATE tasks SET completed_at = updated_at
@@ -79,7 +84,8 @@ impl Store {
             .prepare(
                 "SELECT id, kind, url, filename, dest, status, total, received, error,
                         created_at, updated_at, archived, active_ms, completed_at, backend,
-                        category, headers, info_hash, torrent_source, uploaded, torrent_files
+                        category, headers, info_hash, torrent_source, uploaded, torrent_files,
+                        own_dir
                  FROM tasks ORDER BY created_at DESC",
             )
             .map_err(err)?;
@@ -121,6 +127,7 @@ impl Store {
                     leechers: 0,
                     peers: 0,
                     up_speed: 0,
+                    own_dir: r.get::<_, i64>(21)? != 0,
                 })
             })
             .map_err(err)?;
@@ -134,14 +141,15 @@ impl Store {
                 "INSERT INTO tasks
                    (id, kind, url, filename, dest, status, total, received, error,
                     created_at, updated_at, archived, active_ms, completed_at, backend,
-                    category, headers, info_hash, torrent_source, uploaded, torrent_files)
+                    category, headers, info_hash, torrent_source, uploaded, torrent_files,
+                    own_dir)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,
-                         ?18,?19,?20,?21)
+                         ?18,?19,?20,?21,?22)
                  ON CONFLICT(id) DO UPDATE SET
                    status=?6, total=?7, received=?8, error=?9, updated_at=?11,
                    archived=?12, active_ms=?13, completed_at=?14, backend=?15,
                    category=?16, headers=?17, info_hash=?18, torrent_source=?19,
-                   uploaded=?20, torrent_files=?21",
+                   uploaded=?20, torrent_files=?21, own_dir=?22",
                 params![
                     t.id,
                     kind_str(t.kind),
@@ -164,6 +172,7 @@ impl Store {
                     t.torrent_source.map(source_str),
                     t.uploaded,
                     files_json(&t.files),
+                    t.own_dir as i64,
                 ],
             )
             .map_err(err)?;
@@ -237,6 +246,7 @@ fn status_str(s: TaskStatus) -> &'static str {
     match s {
         TaskStatus::Queued => "queued",
         TaskStatus::Connecting => "connecting",
+        TaskStatus::Checking => "checking",
         TaskStatus::Downloading => "downloading",
         TaskStatus::Paused => "paused",
         TaskStatus::Moving => "moving",
@@ -252,6 +262,7 @@ fn parse_status(s: &str) -> TaskStatus {
     match s {
         "queued" => TaskStatus::Queued,
         "connecting" => TaskStatus::Connecting,
+        "checking" => TaskStatus::Checking,
         "downloading" => TaskStatus::Downloading,
         "paused" => TaskStatus::Paused,
         "moving" => TaskStatus::Moving,
@@ -324,6 +335,7 @@ mod tests {
             leechers: 0,
             peers: 0,
             up_speed: 0,
+            own_dir: false,
         }
     }
 

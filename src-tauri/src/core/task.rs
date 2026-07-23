@@ -42,6 +42,60 @@ fn default_true() -> bool {
     true
 }
 
+/// A torrent resolved to its file list up front, before the user commits to
+/// downloading it — what the add-torrent modal needs to show a file picker.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResolvedTorrent {
+    pub info_hash: String,
+    pub name: Option<String>,
+    /// Total size of every file in the torrent.
+    pub total: u64,
+    /// Files in torrent order (index = position, which is what selection uses).
+    pub files: Vec<TorrentFile>,
+}
+
+/// The resolved torrent plus the engine's filing suggestions, sent to the
+/// add-torrent modal so it can pre-fill the save folder and category.
+#[derive(Debug, Clone, Serialize)]
+pub struct TorrentPreview {
+    #[serde(flatten)]
+    pub resolved: ResolvedTorrent,
+    /// Category a rule would file this under, if any (the modal pre-selects it).
+    pub suggested_category: Option<String>,
+    /// Folder the download would default to (the suggested category's folder, or
+    /// the plain download dir) — the modal shows it and lets the user override.
+    pub default_dir: String,
+}
+
+/// One connected peer, for the detail panel's Peers tab.
+#[derive(Debug, Clone, Serialize)]
+pub struct PeerInfo {
+    /// Remote address (`ip:port`).
+    pub addr: String,
+    /// Connection state ("live", "connecting", …).
+    pub state: String,
+    /// Bytes fetched from this peer so far.
+    pub downloaded: u64,
+}
+
+/// Live per-torrent detail the expanded card polls while it's open — the heavy
+/// stuff that doesn't belong on every progress tick.
+#[derive(Debug, Clone, Serialize)]
+pub struct TorrentDetails {
+    /// Files with live per-file progress and current selection.
+    pub files: Vec<TorrentFile>,
+    /// Connected peers.
+    pub peers: Vec<PeerInfo>,
+    /// Tracker URLs (librqbit doesn't expose per-tracker announce status).
+    pub trackers: Vec<String>,
+    /// Have-pieces bucketed into ≤200 segments — each is the fraction of pieces
+    /// in that range we hold, for the piece-level Progress bar.
+    pub pieces: Vec<f32>,
+    /// Distributed copies of the torrent reachable in the swarm (the rarest
+    /// piece's availability, counting ourselves) — qBittorrent's "availability".
+    pub availability: f64,
+}
+
 /// A task's point in its lifecycle.
 ///
 /// ```text
@@ -68,6 +122,9 @@ fn default_true() -> bool {
 pub enum TaskStatus {
     Queued,
     Connecting,
+    /// Torrent-only: verifying already-present pieces / resolving metadata before
+    /// data actually transfers.
+    Checking,
     Downloading,
     Paused,
     Moving,
@@ -89,7 +146,10 @@ impl TaskStatus {
     pub fn is_active(self) -> bool {
         matches!(
             self,
-            TaskStatus::Queued | TaskStatus::Connecting | TaskStatus::Downloading
+            TaskStatus::Queued
+                | TaskStatus::Connecting
+                | TaskStatus::Checking
+                | TaskStatus::Downloading
         )
     }
 }
@@ -165,6 +225,12 @@ pub struct Task {
     /// Upload speed in bytes/sec. Transient, like the swarm counts.
     #[serde(default)]
     pub up_speed: u64,
+    /// True when `dest` is a folder this torrent created for itself (the
+    /// "create subfolder" layout), so it's safe to remove on delete. False when
+    /// files were saved directly into a folder the user chose (which may hold
+    /// other downloads) — we only ever delete our own files there, never the folder.
+    #[serde(default)]
+    pub own_dir: bool,
 }
 
 impl Task {
@@ -208,6 +274,19 @@ pub struct TaskProgress {
     /// Bytes per second, smoothed by the engine.
     pub speed: u64,
     pub status: TaskStatus,
+    /// Torrent-only live readings — 0 for HTTP. Carried on the tick so a torrent
+    /// row shows upload activity, peers, and swarm counts without waiting for a
+    /// full task update.
+    #[serde(default)]
+    pub up_speed: u64,
+    #[serde(default)]
+    pub uploaded: u64,
+    #[serde(default)]
+    pub peers: u32,
+    #[serde(default)]
+    pub seeders: u32,
+    #[serde(default)]
+    pub leechers: u32,
 }
 
 /// Milliseconds since the Unix epoch.

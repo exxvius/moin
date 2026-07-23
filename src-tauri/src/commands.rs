@@ -9,7 +9,7 @@ use crate::core::backend::BackendInfo;
 use crate::core::category::Category;
 use crate::core::engine::Engine;
 use crate::core::settings::Settings;
-use crate::core::task::Task;
+use crate::core::task::{Task, TorrentDetails, TorrentPreview};
 use crate::core::tool::ToolStatus;
 use crate::events;
 
@@ -61,17 +61,54 @@ pub async fn add_download(
         .add_http(url, dir, category, headers.unwrap_or_default(), filename)
 }
 
-/// Add a torrent from a magnet URI or a local `.torrent` file path. `dest` is the
-/// download folder (the category's save-folder override still applies).
+/// Resolve a torrent (magnet or `.torrent` path) to its file list so the
+/// add-torrent modal can show a picker. For a magnet this reaches the swarm and
+/// may take a moment or time out.
 #[tauri::command]
-pub async fn add_torrent(
+pub async fn prepare_torrent(
     app: AppHandle,
     state: State<'_, AppState>,
     source: String,
-    category: Option<String>,
-) -> Result<Task, String> {
+) -> Result<TorrentPreview, String> {
     let dir = download_dir(&app, &state);
-    state.engine.add_torrent(source, dir, category)
+    state.engine.prepare_torrent(source, dir).await
+}
+
+/// Add a prepared torrent to the queue with the chosen folder, category, and the
+/// indices of the files to include (empty = all files).
+#[tauri::command]
+pub async fn add_torrent(
+    state: State<'_, AppState>,
+    source: String,
+    dir: String,
+    category: Option<String>,
+    selected: Vec<usize>,
+    folder: Option<String>,
+    renames: Vec<String>,
+) -> Result<Task, String> {
+    state
+        .engine
+        .add_torrent(source, dir.into(), category, selected, folder, renames)
+}
+
+/// Live detail (files, peers, trackers) for a torrent, polled by its expanded
+/// card.
+#[tauri::command]
+pub async fn torrent_details(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<TorrentDetails, String> {
+    state.engine.torrent_details(&id).await
+}
+
+/// Change which files a torrent downloads (indices to keep), applied live.
+#[tauri::command]
+pub async fn set_torrent_files(
+    state: State<'_, AppState>,
+    id: String,
+    selected: Vec<usize>,
+) -> Result<(), String> {
+    state.engine.set_torrent_files(&id, selected).await
 }
 
 #[tauri::command]
@@ -93,19 +130,19 @@ pub async fn resume_download(state: State<'_, AppState>, id: String) -> Result<(
 
 #[tauri::command]
 pub async fn cancel_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.engine.cancel(&id);
+    state.engine.cancel(&id).await;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn remove_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.engine.remove(&id)
+    state.engine.remove(&id).await
 }
 
 /// Remove from the list and delete the downloaded file from disk.
 #[tauri::command]
 pub async fn delete_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.engine.delete(&id)
+    state.engine.delete(&id).await
 }
 
 /// Retry an archived download from scratch (re-queues it fresh).

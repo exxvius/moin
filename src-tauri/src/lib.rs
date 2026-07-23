@@ -112,7 +112,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::add_download,
+            commands::prepare_torrent,
             commands::add_torrent,
+            commands::torrent_details,
+            commands::set_torrent_files,
             commands::list_downloads,
             commands::pause_download,
             commands::resume_download,

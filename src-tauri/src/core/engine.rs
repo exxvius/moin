@@ -11,7 +11,8 @@ use uuid::Uuid;
 
 use super::aria2::Aria2Backend;
 use super::backend::{
-    BackendInfo, Control, DownloadBackend, NetConfig, Outcome, ProgressFn, Signal, TransferOpts,
+    BackendInfo, Control, DownloadBackend, NetConfig, Outcome, ProgressFn, Signal, TorrentTick,
+    TransferOpts,
 };
 use super::category::{self, Candidate, Category};
 use super::embedded::EmbeddedBackend;
@@ -19,9 +20,10 @@ use super::settings::{CategoryChangeBehavior, Settings};
 use super::store::Store;
 use super::task::{
     filename_from_url, now_ms, sanitize_filename, Task, TaskKind, TaskProgress, TaskStatus,
+    TorrentDetails, TorrentPreview,
 };
 use super::tool::{Aria2Tool, ToolStatus};
-use super::torrent::parse_meta;
+use super::torrent::{self, parse_meta};
 
 /// How the engine reports changes to the outside world (the UI, via Tauri).
 pub trait Emitter: Send + Sync + 'static {
@@ -132,9 +134,17 @@ impl Engine {
             // resuming from where it sits is safe.
             if matches!(
                 task.status,
-                TaskStatus::Connecting | TaskStatus::Downloading | TaskStatus::Moving
+                TaskStatus::Connecting
+                    | TaskStatus::Checking
+                    | TaskStatus::Downloading
+                    | TaskStatus::Moving
             ) {
                 task.status = TaskStatus::Paused;
+            }
+            // A torrent that was seeding isn't actually seeding until it's re-added
+            // to the session (a resume milestone); settle it as done for now.
+            if task.status == TaskStatus::Seeding {
+                task.status = TaskStatus::Completed;
             }
             tasks.insert(task.id.clone(), Entry::idle(task));
         }
@@ -249,6 +259,7 @@ impl Engine {
                 leechers: 0,
                 peers: 0,
                 up_speed: 0,
+                own_dir: false,
             };
             tasks.insert(task.id.clone(), Entry::idle(task.clone()));
             task
@@ -260,14 +271,163 @@ impl Engine {
         Ok(task)
     }
 
-    /// Add a torrent from a magnet URI or a local `.torrent` file. `dest` is the
-    /// output *folder* (a torrent is a set of files); librqbit manages its own
-    /// partials + fastresume inside it.
+    /// Resolve a torrent's metadata (its file list) so the add-torrent modal can
+    /// show a file picker, plus the category + folder the download would default
+    /// to. The resolved `.torrent` is cached, so the eventual add is cheap.
+    pub async fn prepare_torrent(
+        &self,
+        source: String,
+        dir: PathBuf,
+    ) -> Result<TorrentPreview, String> {
+        let source = source.trim().to_string();
+        if source.is_empty() {
+            return Err("no torrent given".to_string());
+        }
+        let backend = self
+            .inner
+            .backend_for(TaskKind::Torrent)
+            .ok_or_else(|| "no torrent backend is available".to_string())?;
+        let resolved = backend
+            .resolve_torrent(&source)
+            .await
+            .ok_or_else(|| "this backend can't resolve torrents".to_string())??;
+
+        // Suggest a category from the torrent name, then the folder it implies.
+        let name = resolved.name.clone().unwrap_or_default();
+        let suggested = {
+            let cand = Candidate::from_url_named(
+                &source,
+                category::AddMethodKind::ManualTorrent,
+                Some(&name),
+            );
+            category::categorize(&cand, &self.inner.categories.lock().unwrap())
+        };
+        let default_dir = {
+            let cats = self.inner.categories.lock().unwrap();
+            suggested
+                .as_ref()
+                .and_then(|id| cats.iter().find(|c| c.id == *id))
+                .and_then(|c| c.save_dir.clone())
+                .unwrap_or_else(|| dir.to_string_lossy().into_owned())
+        };
+
+        Ok(TorrentPreview {
+            resolved,
+            suggested_category: suggested,
+            default_dir,
+        })
+    }
+
+    /// Live detail (files, peers, trackers) for a torrent task — what the expanded
+    /// card polls while it's open.
+    pub async fn torrent_details(&self, id: &str) -> Result<TorrentDetails, String> {
+        let info_hash = {
+            let tasks = self.inner.tasks.lock().unwrap();
+            let entry = tasks
+                .get(id)
+                .ok_or_else(|| "no such download".to_string())?;
+            entry
+                .task
+                .info_hash
+                .clone()
+                .ok_or_else(|| "not a torrent".to_string())?
+        };
+        let backend = self
+            .inner
+            .backend_for(TaskKind::Torrent)
+            .ok_or_else(|| "no torrent backend is available".to_string())?;
+        backend
+            .torrent_details(&info_hash)
+            .await
+            .ok_or_else(|| "this backend can't inspect torrents".to_string())?
+    }
+
+    /// Change which files a torrent downloads (`selected` = indices to keep),
+    /// applied live to the running torrent and saved to the task.
+    pub async fn set_torrent_files(&self, id: &str, selected: Vec<usize>) -> Result<(), String> {
+        let info_hash = {
+            let tasks = self.inner.tasks.lock().unwrap();
+            let entry = tasks
+                .get(id)
+                .ok_or_else(|| "no such download".to_string())?;
+            entry
+                .task
+                .info_hash
+                .clone()
+                .ok_or_else(|| "not a torrent".to_string())?
+        };
+        let backend = self
+            .inner
+            .backend_for(TaskKind::Torrent)
+            .ok_or_else(|| "no torrent backend is available".to_string())?;
+        backend
+            .set_torrent_files(&info_hash, &selected)
+            .await
+            .ok_or_else(|| "this backend can't change torrent files".to_string())??;
+
+        // Reflect the new selection on the task. We deliberately do NOT delete a
+        // deselected file from disk: librqbit tracks piece completion internally,
+        // so removing a file behind its back leaves those pieces marked "have" —
+        // the file then shows 100% but is gone, and re-selecting never re-downloads
+        // it. Excluding via `only_files` (above) is the safe operation; a file that
+        // was never downloaded simply isn't fetched, and a downloaded one keeps its
+        // data (matching qBittorrent's "don't download" behavior).
+        let (task, requeue) = {
+            let mut tasks = self.inner.tasks.lock().unwrap();
+            let Some(entry) = tasks.get_mut(id) else {
+                return Ok(());
+            };
+            // Did the user newly include a file that wasn't selected before?
+            let added = entry
+                .task
+                .files
+                .iter()
+                .enumerate()
+                .any(|(i, f)| !f.selected && selected.contains(&i));
+            for (i, f) in entry.task.files.iter_mut().enumerate() {
+                f.selected = selected.contains(&i);
+            }
+            let total: u64 = entry
+                .task
+                .files
+                .iter()
+                .filter(|f| f.selected)
+                .map(|f| f.size)
+                .sum();
+            entry.task.total = (total > 0).then_some(total);
+
+            // If files were added while the torrent isn't running (it finished, or
+            // is paused), it needs to fetch the newly-wanted pieces — re-queue it so
+            // the download loop restarts with the updated selection. A running
+            // torrent already picks up the change on its next poll.
+            let requeue = added && entry.control.is_none() && !entry.moving;
+            if requeue {
+                entry.task.status = TaskStatus::Queued;
+                entry.task.completed_at = None;
+                entry.task.error = None;
+            }
+            entry.task.updated_at = now_ms();
+            (entry.task.clone(), requeue)
+        };
+        self.persist_emit(&task);
+        if requeue {
+            Inner::pump(self.inner.clone());
+        }
+        Ok(())
+    }
+
+    /// Add a torrent to the queue with the user's chosen folder, category, and
+    /// file selection (indices to include; empty = all). `dir` is the output
+    /// *folder* — librqbit manages its own partials + fastresume inside it. The
+    /// file list is read from the `.torrent` cached during [`Self::prepare_torrent`].
     pub fn add_torrent(
         &self,
         source: String,
         dir: PathBuf,
         category: Option<String>,
+        selected: Vec<usize>,
+        folder: Option<String>,
+        renames: Vec<String>,
     ) -> Result<Task, String> {
         let source = source.trim().to_string();
         let meta = parse_meta(&source)?;
@@ -281,28 +441,50 @@ impl Engine {
             .or_else(|| meta.info_hash.clone())
             .unwrap_or_else(|| "torrent".to_string());
 
-        // Auto-file by the torrent's name when the caller didn't pick a category,
-        // running the same rules a manual add does (tagged as a torrent source).
-        let category = category.or_else(|| {
-            let cand = Candidate::from_url_named(
-                &source,
-                category::AddMethodKind::ManualTorrent,
-                Some(&display),
-            );
-            category::categorize(&cand, &self.inner.categories.lock().unwrap())
-        });
+        // Content layout: `Some(name)` nests the files under that folder (its name
+        // may have been renamed in the modal); `None` saves them directly in the
+        // chosen folder. `dest` is the actual output folder either way, so the file
+        // paths (`dest`/`file.path`) stay correct for progress + deletion.
+        let own_dir = folder.is_some();
+        let dir = match folder.as_deref().and_then(sanitize_filename) {
+            Some(name) => dir.join(name),
+            None => dir,
+        };
 
-        // Resolve the category: keep only an id that still exists, and honor its
-        // save-folder override for the output dir.
-        let (category, dir) = {
-            let cats = self.inner.categories.lock().unwrap();
-            match category.and_then(|id| cats.iter().find(|c| c.id == id)) {
-                Some(c) => {
-                    let dir = c.save_dir.clone().map(PathBuf::from).unwrap_or(dir);
-                    (Some(c.id.clone()), dir)
+        // Load the file list from the cached .torrent, apply the selection, and
+        // apply any per-file renames (index-aligned relative paths; blank keeps
+        // the original). An empty selection means "all files".
+        let files = meta
+            .info_hash
+            .as_deref()
+            .map(|h| torrent::meta_path(&self.inner.data_dir, h))
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|b| torrent::files_from_bytes(&b).ok())
+            .unwrap_or_default();
+        let files: Vec<_> = files
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut f)| {
+                if !selected.is_empty() {
+                    f.selected = selected.contains(&i);
                 }
-                None => (None, dir),
-            }
+                if let Some(path) = renames.get(i) {
+                    if !path.trim().is_empty() {
+                        f.path = path.clone();
+                    }
+                }
+                f
+            })
+            .collect();
+        let total: u64 = files.iter().filter(|f| f.selected).map(|f| f.size).sum();
+        let total = (total > 0).then_some(total);
+
+        // The folder is the caller's explicit choice (the modal pre-filled it from
+        // the category's folder but let the user override), so use it as-is — just
+        // validate the category id still exists.
+        let category = {
+            let cats = self.inner.categories.lock().unwrap();
+            category.filter(|id| cats.iter().any(|c| c.id == *id))
         };
 
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -318,7 +500,7 @@ impl Engine {
                 filename: display,
                 dest,
                 status: TaskStatus::Queued,
-                total: None,
+                total,
                 received: 0,
                 error: None,
                 created_at: now,
@@ -331,12 +513,13 @@ impl Engine {
                 headers: BTreeMap::new(),
                 info_hash: meta.info_hash,
                 torrent_source: Some(meta.source),
-                files: Vec::new(),
+                files,
                 uploaded: 0,
                 seeders: 0,
                 leechers: 0,
                 peers: 0,
                 up_speed: 0,
+                own_dir,
             };
             tasks.insert(task.id.clone(), Entry::idle(task.clone()));
             task
@@ -393,7 +576,20 @@ impl Engine {
         Inner::pump(self.inner.clone());
     }
 
-    pub fn cancel(&self, id: &str) {
+    pub async fn cancel(&self, id: &str) {
+        // A torrent is detached from the session first (releasing its file handles);
+        // a canceled download keeps nothing, so its partial data is dropped after.
+        let torrent_hash = {
+            let tasks = self.inner.tasks.lock().unwrap();
+            tasks
+                .get(id)
+                .filter(|e| e.task.is_torrent())
+                .and_then(|e| e.task.info_hash.clone())
+        };
+        if let Some(hash) = torrent_hash {
+            let _ = self.remove_torrent_from_session(&hash).await;
+        }
+
         let task = {
             let mut tasks = self.inner.tasks.lock().unwrap();
             let Some(entry) = tasks.get_mut(id) else {
@@ -410,24 +606,89 @@ impl Engine {
             entry.task.updated_at = now_ms();
             entry.task.clone()
         };
-        cleanup_partial(&task);
+        // A canceled torrent discards its partial data; HTTP drops its `.part`.
+        purge_files(&task, true);
         self.persist_emit(&task);
         Inner::pump(self.inner.clone());
     }
 
     /// Remove from the list: archive the record (kept for stats), delete the
     /// partial file, and leave any finished file on disk.
-    pub fn remove(&self, id: &str) -> Result<(), String> {
-        self.archive(id, false)
+    pub async fn remove(&self, id: &str) -> Result<(), String> {
+        self.archive(id, false).await
     }
 
     /// Remove from the list AND delete the downloaded file from disk. Fails (and
     /// leaves the download in the list) if the file can't be deleted.
-    pub fn delete(&self, id: &str) -> Result<(), String> {
-        self.archive(id, true)
+    pub async fn delete(&self, id: &str) -> Result<(), String> {
+        self.archive(id, true).await
     }
 
-    fn archive(&self, id: &str, delete_file: bool) -> Result<(), String> {
+    /// Ask the torrent backend to detach a torrent from its session, releasing the
+    /// file handles. Files are always kept — moin deletes data itself.
+    async fn remove_torrent_from_session(&self, info_hash: &str) -> Result<(), String> {
+        let Some(backend) = self.inner.backend_for(TaskKind::Torrent) else {
+            return Ok(());
+        };
+        backend.remove_torrent(info_hash).await.unwrap_or(Ok(()))
+    }
+
+    async fn archive(&self, id: &str, delete_file: bool) -> Result<(), String> {
+        // A torrent is detached from librqbit first (it holds the file handles);
+        // moin then deletes only this torrent's own files — never a shared folder.
+        let torrent = {
+            let tasks = self.inner.tasks.lock().unwrap();
+            tasks
+                .get(id)
+                .filter(|e| e.task.is_torrent())
+                .map(|e| (e.task.info_hash.clone(), e.control.is_some()))
+        };
+        if let Some((hash, running)) = torrent {
+            if let Some(hash) = hash {
+                self.remove_torrent_from_session(&hash).await?;
+            }
+            // Running: the loop notices the torrent is gone and stops; `finish`
+            // archives the record and purges its files. Otherwise do it here.
+            let mut tasks = self.inner.tasks.lock().unwrap();
+            let Some(entry) = tasks.get_mut(id) else {
+                return Ok(());
+            };
+            if running {
+                entry.pending_archive = Some(delete_file);
+                if let Some(control) = &entry.control {
+                    control.set(Signal::Cancel);
+                }
+                return Ok(());
+            }
+            let task = entry.task.clone();
+            drop(tasks);
+
+            // Delete the files first so a failure (a file/folder open elsewhere)
+            // holds the download in the list — nothing is archived, and the user
+            // can free it and retry.
+            if delete_file {
+                delete_torrent_files(&task)
+                    .map_err(|e| format!("Couldn't delete the files: {e}. The download is still in your list — free the files (e.g. close a window that's in the folder) and try again."))?;
+            }
+
+            let task = {
+                let mut tasks = self.inner.tasks.lock().unwrap();
+                let Some(entry) = tasks.get_mut(id) else {
+                    return Ok(());
+                };
+                entry.task.archived = true;
+                if entry.task.status.is_active() {
+                    entry.task.status = TaskStatus::Canceled;
+                }
+                entry.task.updated_at = now_ms();
+                entry.task.clone()
+            };
+            let _ = self.inner.store.lock().unwrap().upsert(&task);
+            self.inner.emitter.updated(&task);
+            Inner::pump(self.inner.clone());
+            return Ok(());
+        }
+
         // Running: defer. Deleting the `.part` now would fail on Windows (the
         // download still holds the handle open), so wait for the task to stop and
         // let `finish` archive it. A running task is incomplete, so there's no
@@ -781,11 +1042,13 @@ impl Inner {
     }
 
     fn running_count(&self) -> usize {
+        // A seeding torrent keeps its run loop alive but isn't using a download
+        // slot, so it mustn't count against the concurrency limit.
         self.tasks
             .lock()
             .unwrap()
             .values()
-            .filter(|e| e.control.is_some())
+            .filter(|e| e.control.is_some() && e.task.status != TaskStatus::Seeding)
             .count()
     }
 
@@ -891,76 +1154,117 @@ impl Inner {
             speed: 0.0,
         }));
 
-        Arc::new(move |received: u64, total: Option<u64>| {
-            let now = Instant::now();
+        Arc::new(
+            move |received: u64, total: Option<u64>, torrent: Option<TorrentTick>| {
+                let now = Instant::now();
 
-            // Snapshot the task + decide what to do while briefly holding locks.
-            let (task, newly_started, do_emit, do_persist, speed) = {
-                let mut st = state.lock().unwrap();
-                let mut tasks = inner.tasks.lock().unwrap();
-                let Some(entry) = tasks.get_mut(&id) else {
-                    return;
-                };
-                entry.task.received = received;
-                if let Some(t) = total {
-                    entry.task.total = Some(t);
-                }
-
-                let newly_started = !st.started;
-                if newly_started {
-                    st.started = true;
-                    st.last_tick = now;
-                    entry.task.status = TaskStatus::Downloading;
-                    entry.task.updated_at = now_ms();
-                } else {
-                    // Accumulate active download time (for average speed).
-                    entry.task.active_ms += now.duration_since(st.last_tick).as_millis() as i64;
-                    st.last_tick = now;
-                }
-
-                let do_emit = now.duration_since(st.last_emit) >= Duration::from_millis(200);
-                if do_emit {
-                    let dt = now.duration_since(st.last_emit).as_secs_f64().max(0.001);
-                    let inst = (received.saturating_sub(st.last_bytes)) as f64 / dt;
-                    // Exponential smoothing so the number doesn't jitter.
-                    st.speed = if st.speed == 0.0 {
-                        inst
-                    } else {
-                        st.speed * 0.7 + inst * 0.3
+                // Snapshot the task + decide what to do while briefly holding locks.
+                let (task, newly_started, newly_seeding, do_emit, do_persist, speed) = {
+                    let mut st = state.lock().unwrap();
+                    let mut tasks = inner.tasks.lock().unwrap();
+                    let Some(entry) = tasks.get_mut(&id) else {
+                        return;
                     };
-                    st.last_emit = now;
-                    st.last_bytes = received;
+                    let prev_status = entry.task.status;
+                    entry.task.received = received;
+                    if let Some(t) = total {
+                        entry.task.total = Some(t);
+                    }
+                    // Fold in the live torrent readings (upload, peers, swarm).
+                    if let Some(tick) = torrent {
+                        entry.task.uploaded = tick.uploaded;
+                        entry.task.up_speed = tick.up_speed;
+                        entry.task.peers = tick.peers;
+                        entry.task.seeders = tick.seeders;
+                        entry.task.leechers = tick.leechers;
+                    }
+                    // A torrent reports its own phase (Checking/Downloading/Seeding);
+                    // HTTP is always Downloading while bytes flow.
+                    let status = torrent
+                        .map(|t| t.status)
+                        .unwrap_or(TaskStatus::Downloading);
+
+                    let newly_started = !st.started;
+                    if newly_started {
+                        st.started = true;
+                        st.last_tick = now;
+                        entry.task.updated_at = now_ms();
+                    } else {
+                        // Active time only accrues while actually downloading.
+                        if status == TaskStatus::Downloading {
+                            entry.task.active_ms +=
+                                now.duration_since(st.last_tick).as_millis() as i64;
+                        }
+                        st.last_tick = now;
+                    }
+                    if entry.task.status != status {
+                        entry.task.status = status;
+                        entry.task.updated_at = now_ms();
+                    }
+                    // Record the completion time the first time it reaches seeding.
+                    if status == TaskStatus::Seeding && entry.task.completed_at.is_none() {
+                        entry.task.completed_at = Some(now_ms());
+                    }
+
+                    let do_emit = now.duration_since(st.last_emit) >= Duration::from_millis(200);
+                    if do_emit {
+                        let dt = now.duration_since(st.last_emit).as_secs_f64().max(0.001);
+                        let inst = (received.saturating_sub(st.last_bytes)) as f64 / dt;
+                        // Exponential smoothing so the number doesn't jitter.
+                        st.speed = if st.speed == 0.0 {
+                            inst
+                        } else {
+                            st.speed * 0.7 + inst * 0.3
+                        };
+                        st.last_emit = now;
+                        st.last_bytes = received;
+                    }
+                    let do_persist = now.duration_since(st.last_persist) >= Duration::from_secs(2);
+                    if do_persist {
+                        st.last_persist = now;
+                    }
+
+                    let newly_seeding =
+                        status == TaskStatus::Seeding && prev_status != TaskStatus::Seeding;
+                    (
+                        entry.task.clone(),
+                        newly_started,
+                        newly_seeding,
+                        do_emit,
+                        do_persist,
+                        st.speed,
+                    )
+                };
+
+                if newly_started {
+                    inner.emitter.updated(&task);
                 }
-                let do_persist = now.duration_since(st.last_persist) >= Duration::from_secs(2);
+                if newly_seeding {
+                    // Freed a download slot + it's a meaningful status change — push
+                    // a full update and let the next queued download start.
+                    inner.emitter.updated(&task);
+                    let _ = inner.store.lock().unwrap().upsert(&task);
+                    Inner::pump(inner.clone());
+                }
+                if do_emit {
+                    inner.emitter.progress(&TaskProgress {
+                        id: id.clone(),
+                        received,
+                        total,
+                        speed: speed as u64,
+                        status: task.status,
+                        up_speed: task.up_speed,
+                        uploaded: task.uploaded,
+                        peers: task.peers,
+                        seeders: task.seeders,
+                        leechers: task.leechers,
+                    });
+                }
                 if do_persist {
-                    st.last_persist = now;
+                    let _ = inner.store.lock().unwrap().upsert(&task);
                 }
-
-                (
-                    entry.task.clone(),
-                    newly_started,
-                    do_emit,
-                    do_persist,
-                    st.speed,
-                )
-            };
-
-            if newly_started {
-                inner.emitter.updated(&task);
-            }
-            if do_emit {
-                inner.emitter.progress(&TaskProgress {
-                    id: id.clone(),
-                    received,
-                    total,
-                    speed: speed as u64,
-                    status: TaskStatus::Downloading,
-                });
-            }
-            if do_persist {
-                let _ = inner.store.lock().unwrap().upsert(&task);
-            }
-        })
+            },
+        )
     }
 
     fn finish(inner: Arc<Inner>, id: String, outcome: Outcome) {
@@ -1033,7 +1337,9 @@ impl Inner {
             }
             Post::Settle(task) => {
                 if task.status == TaskStatus::Canceled {
-                    cleanup_partial(&task);
+                    // Canceled discards partial data — a torrent's own files, or an
+                    // HTTP `.part` (torrent-aware via `purge_files`).
+                    purge_files(&task, true);
                 }
                 let _ = inner.store.lock().unwrap().upsert(&task);
                 inner.emitter.updated(&task);
@@ -1061,6 +1367,20 @@ impl Inner {
             };
             let _ = inner.store.lock().unwrap().upsert(&task);
             inner.emitter.updated(&task);
+            return;
+        }
+
+        // A torrent is a folder of files managed by librqbit — relocating it is a
+        // detach + folder move + re-add, not a single-file rename.
+        let is_torrent = inner
+            .tasks
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|e| e.task.is_torrent())
+            .unwrap_or(false);
+        if is_torrent {
+            Inner::begin_torrent_move(inner, id, category, target_dir);
             return;
         }
 
@@ -1148,6 +1468,128 @@ impl Inner {
                 tokio::spawn(async move {
                     let result = run_move(&inner, &job).await;
                     Inner::finish_move(inner, *job, result);
+                });
+            }
+        }
+    }
+
+    /// Relocate a torrent into another category's folder: detach it from the
+    /// session, move only its own files to the new home, then re-queue so it
+    /// re-adds there (librqbit verifies the moved files and resumes/seeds).
+    fn begin_torrent_move(
+        inner: Arc<Inner>,
+        id: String,
+        category: Option<String>,
+        target_dir: PathBuf,
+    ) {
+        enum Plan {
+            Nothing,
+            Retag(Task),
+            Move {
+                info_hash: Option<String>,
+                old_dest: String,
+                new_dest: String,
+                files: Vec<crate::core::task::TorrentFile>,
+                own_dir: bool,
+                category: Option<String>,
+                task: Task,
+            },
+        }
+
+        let plan = {
+            let mut tasks = inner.tasks.lock().unwrap();
+            match tasks.get_mut(&id) {
+                None => Plan::Nothing,
+                Some(entry) if entry.moving || entry.control.is_some() => Plan::Nothing,
+                Some(entry) => {
+                    let new_dest = if entry.task.own_dir {
+                        target_dir.join(&entry.task.filename)
+                    } else {
+                        target_dir.clone()
+                    }
+                    .to_string_lossy()
+                    .into_owned();
+                    if new_dest == entry.task.dest {
+                        entry.task.category = category;
+                        entry.task.updated_at = now_ms();
+                        Plan::Retag(entry.task.clone())
+                    } else {
+                        let old_dest = entry.task.dest.clone();
+                        let files = entry.task.files.clone();
+                        let info_hash = entry.task.info_hash.clone();
+                        let own_dir = entry.task.own_dir;
+                        entry.moving = true;
+                        entry.task.status = TaskStatus::Moving;
+                        entry.task.error = None;
+                        entry.task.updated_at = now_ms();
+                        Plan::Move {
+                            info_hash,
+                            old_dest,
+                            new_dest,
+                            files,
+                            own_dir,
+                            category,
+                            task: entry.task.clone(),
+                        }
+                    }
+                }
+            }
+        };
+
+        match plan {
+            Plan::Nothing => {}
+            Plan::Retag(task) => {
+                let _ = inner.store.lock().unwrap().upsert(&task);
+                inner.emitter.updated(&task);
+            }
+            Plan::Move {
+                info_hash,
+                old_dest,
+                new_dest,
+                files,
+                own_dir,
+                category,
+                task,
+            } => {
+                let _ = inner.store.lock().unwrap().upsert(&task);
+                inner.emitter.updated(&task);
+                emit_move(&inner, &id, 0, task.total);
+                tokio::spawn(async move {
+                    // Detach from the session so the files aren't held open.
+                    if let Some(hash) = &info_hash {
+                        if let Some(b) = inner.backend_for(TaskKind::Torrent) {
+                            let _ = b.remove_torrent(hash).await;
+                        }
+                    }
+                    let result =
+                        move_torrent_files(old_dest, new_dest.clone(), files, own_dir).await;
+
+                    let task = {
+                        let mut tasks = inner.tasks.lock().unwrap();
+                        let Some(entry) = tasks.get_mut(&id) else {
+                            return;
+                        };
+                        entry.moving = false;
+                        match &result {
+                            Ok(()) => {
+                                entry.task.dest = new_dest;
+                                entry.task.category = category;
+                                entry.task.error = None;
+                                // Re-queue so it re-adds at the new folder + resumes.
+                                entry.task.status = TaskStatus::Queued;
+                                entry.task.completed_at = None;
+                            }
+                            Err(e) => {
+                                entry.task.status = TaskStatus::Paused;
+                                entry.task.error = Some(e.clone());
+                            }
+                        }
+                        entry.task.updated_at = now_ms();
+                        entry.task.clone()
+                    };
+                    let _ = inner.store.lock().unwrap().upsert(&task);
+                    inner.emitter.updated(&task);
+                    Inner::pump(inner);
                 });
             }
         }
@@ -1278,17 +1720,142 @@ fn cleanup_file(path: String) {
 /// Delete a task's partial (`.part`) file and its `.meta` sidecar, plus the
 /// finished file when `delete_file` is set — all robustly, in the background.
 fn purge_files(task: &Task, delete_file: bool) {
+    if task.is_torrent() {
+        if delete_file {
+            // Best-effort on the deferred (finish/cancel) path.
+            let _ = delete_torrent_files(task);
+        }
+        return;
+    }
     cleanup_partial(task);
     if delete_file {
         cleanup_file(task.dest.clone());
     }
 }
 
+/// Delete a torrent's own files (and only those). We remove each file under
+/// `dest`, then any now-empty sub-directory the torrent created, and finally the
+/// output folder itself *only* when the torrent owns it (the "create subfolder"
+/// layout). A folder saved into directly (which may hold other downloads) is
+/// never removed. Returns an error if something couldn't be removed (e.g. a file
+/// or the folder is open in another program) so the caller can hold the delete.
+fn delete_torrent_files(task: &Task) -> Result<(), String> {
+    let base = Path::new(&task.dest);
+    let mut failed: Option<String> = None;
+    for f in &task.files {
+        let path = base.join(&f.path);
+        if let Err(e) = remove_if_exists(&path.to_string_lossy()) {
+            failed.get_or_insert_with(|| e.to_string());
+        }
+    }
+    // Empty sub-directories, deepest first so nested ones clear before parents.
+    let mut dirs: Vec<PathBuf> = task
+        .files
+        .iter()
+        .filter_map(|f| Path::new(&f.path).parent())
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| base.join(p))
+        .collect();
+    dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+    dirs.dedup();
+    for d in dirs {
+        let _ = std::fs::remove_dir(d); // only removes empties; leftovers surface below
+    }
+    // Our own content folder: surface a failure (it's likely open elsewhere) so the
+    // delete can be retried after the user frees it. `remove_dir` also fails on a
+    // non-empty folder, which catches any file that couldn't be deleted above.
+    if task.own_dir && base.exists() {
+        if let Err(e) = std::fs::remove_dir(base) {
+            failed.get_or_insert_with(|| e.to_string());
+        }
+    }
+    match failed {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
 /// Drop a task's in-progress artifacts: the `.part` file and the multi-connection
-/// `.meta` resume sidecar (absent for single-stream downloads — a no-op then).
+/// `.meta` resume sidecar (absent for single-stream downloads — a no-op then). A
+/// torrent has no `.part`/`.meta` — librqbit manages its own files, so skip it.
 fn cleanup_partial(task: &Task) {
+    if task.is_torrent() {
+        return;
+    }
     cleanup_file(task.part_path());
     cleanup_file(task.meta_path());
+}
+
+/// Move a torrent's own files from `old_dest` to `new_dest`, off the async
+/// runtime. In the "create subfolder" layout the whole folder moves; otherwise
+/// each file is moved individually (leaving a shared folder's other files, and
+/// the folder itself, untouched). Same-drive moves rename; cross-drive copy.
+async fn move_torrent_files(
+    old_dest: String,
+    new_dest: String,
+    files: Vec<crate::core::task::TorrentFile>,
+    own_dir: bool,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let old = Path::new(&old_dest);
+        let new = Path::new(&new_dest);
+        if own_dir {
+            if let Some(parent) = new.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            if std::fs::rename(old, new).is_ok() {
+                return Ok(());
+            }
+            copy_dir_all(old, new).map_err(|e| e.to_string())?;
+            let _ = std::fs::remove_dir_all(old);
+            Ok(())
+        } else {
+            for f in &files {
+                let src = old.join(&f.path);
+                if !src.exists() {
+                    continue;
+                }
+                let dst = new.join(&f.path);
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                if std::fs::rename(&src, &dst).is_err() {
+                    std::fs::copy(&src, &dst).map_err(|e| e.to_string())?;
+                    let _ = std::fs::remove_file(&src);
+                }
+            }
+            // Clear now-empty source sub-directories (never the shared root).
+            let mut dirs: Vec<PathBuf> = files
+                .iter()
+                .filter_map(|f| Path::new(&f.path).parent())
+                .filter(|p| !p.as_os_str().is_empty())
+                .map(|p| old.join(p))
+                .collect();
+            dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+            dirs.dedup();
+            for d in dirs {
+                let _ = std::fs::remove_dir(d);
+            }
+            Ok(())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Recursively copy a directory tree.
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&entry.path(), &to)?;
+        } else {
+            std::fs::copy(entry.path(), &to)?;
+        }
+    }
+    Ok(())
 }
 
 /// Relocate a task's files to their new home. The tiny resume sidecar moves
@@ -1462,6 +2029,11 @@ fn emit_move(inner: &Arc<Inner>, id: &str, moved: u64, total: Option<u64>) {
         total,
         speed: 0,
         status: TaskStatus::Moving,
+        up_speed: 0,
+        uploaded: 0,
+        peers: 0,
+        seeders: 0,
+        leechers: 0,
     });
 }
 
