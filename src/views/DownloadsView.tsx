@@ -5,7 +5,7 @@ import type {
   ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { ArrowDown, ArrowUp, Users, Sprout } from "lucide-react";
+import { ArrowDown, ArrowUp, Sprout } from "lucide-react";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { AddIcon, SortArrowIcon } from "../components/icons";
 import { AddDownloadModal } from "../components/AddDownloadModal";
@@ -52,13 +52,22 @@ const STATUS_CLASS: Record<TaskStatus, string> = {
   paused: "warn",
   moving: "accent",
   completed: "ok",
-  seeding: "seed",
+  // Seeding reads as an ongoing transfer in the app accent (like downloading),
+  // matching its progress bar — only a stopped torrent turns green (done).
+  seeding: "accent",
   failed: "bad",
   stalled: "warn",
   canceled: "faint",
 };
 
-type FilterId = "all" | "active" | "paused" | "done" | "issues" | "archived";
+type FilterId =
+  | "all"
+  | "active"
+  | "seeding"
+  | "paused"
+  | "done"
+  | "issues"
+  | "archived";
 
 const FILTERS: { id: FilterId; label: string; match: (t: Task) => boolean }[] = [
   { id: "all", label: "All", match: (t) => !t.archived },
@@ -76,6 +85,11 @@ const FILTERS: { id: FilterId; label: string; match: (t: Task) => boolean }[] = 
     id: "paused",
     label: "Paused",
     match: (t) => !t.archived && t.status === "paused",
+  },
+  {
+    id: "seeding",
+    label: "Seeding",
+    match: (t) => !t.archived && t.status === "seeding",
   },
   {
     id: "done",
@@ -402,6 +416,7 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   const counts: Record<FilterId, number> = {
     all: 0,
     active: 0,
+    seeding: 0,
     paused: 0,
     done: 0,
     issues: 0,
@@ -640,6 +655,14 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
       items.push({ label: "Stop seeding", onClick: () => store.pause(task.id) });
     } else if (task.status !== "completed") {
       items.push({ label: "Pause download", onClick: () => store.pause(task.id) });
+    }
+    // A finished torrent that stopped seeding can be put back to seeding, past any
+    // ratio/time limit (it keeps going until stopped by hand).
+    if (task.status === "completed" && task.kind === "torrent") {
+      items.push({
+        label: "Start seeding",
+        onClick: () => store.startSeeding(task.id),
+      });
     }
     if (task.status === "completed" || task.status === "seeding") {
       items.push({
@@ -1134,6 +1157,9 @@ function Card({
   const dl = task.status === "downloading";
   const checking = task.status === "checking";
   const moving = task.status === "moving";
+  const seeding = task.status === "seeding";
+  // Ratio drives the seeding bar: uploaded ÷ downloaded, 0 before anything's done.
+  const ratio = task.received > 0 ? (task.uploaded ?? 0) / task.received : 0;
   // While moving, the bar tracks the file relocation, not the download bytes.
   const movePct =
     moving && move && move.total ? percent(move.moved, move.total) : null;
@@ -1179,15 +1205,29 @@ function Card({
             <span className="dl-name-col">
               <span className="dl-name-text">{task.filename}</span>
               {task.kind === "torrent" && (
-                <span className="dl-torrent-line dim">
-                  <ArrowDown size={12} strokeWidth={2.5} />
-                  {formatSpeed(dl ? speed : 0)}
-                  <ArrowUp size={12} strokeWidth={2.5} />
-                  {formatSpeed(task.up_speed ?? 0)}
-                  <Sprout size={12} strokeWidth={2.5} />
-                  {task.seeders ?? 0}
-                  <Users size={12} strokeWidth={2.5} />
-                  {task.peers ?? 0}
+                <span className="dl-torrent-line">
+                  <span
+                    className={`tl-metric${dl && speed > 0 ? " tl-down" : ""}`}
+                  >
+                    <ArrowDown size={12} strokeWidth={2.5} />
+                    {formatSpeed(dl ? speed : 0)}
+                  </span>
+                  <span
+                    className={`tl-metric${
+                      (task.up_speed ?? 0) > 0 ? " tl-up" : ""
+                    }`}
+                  >
+                    <ArrowUp size={12} strokeWidth={2.5} />
+                    {formatSpeed(task.up_speed ?? 0)}
+                  </span>
+                  <span
+                    className={`tl-metric${
+                      (task.seeders ?? 0) > 0 ? " tl-seeders" : ""
+                    }`}
+                  >
+                    <Sprout size={12} strokeWidth={2.5} />
+                    {task.seeders ?? 0}
+                  </span>
                 </span>
               )}
             </span>
@@ -1200,6 +1240,31 @@ function Card({
           </span>
         );
       case "progress":
+        // Seeding keeps the download's own bar colour (the app accent) — it
+        // doesn't switch tone until seeding actually stops (then it goes to the
+        // done/green bar). The bar is split by a hard line into the accent and a
+        // darker shade of it: below ratio 1.0 the accent is the base and the
+        // darker shade grows from the left to the split (= ratio); at 1.0+ they
+        // swap (`.over`) so the darker shade is the base and the accent marks the
+        // 1.0 point (= 1/ratio). The ratio itself sits where the percentage would.
+        if (seeding) {
+          const over = ratio >= 1;
+          const overlayW = over ? (ratio > 0 ? 1 / ratio : 0) : ratio;
+          return (
+            <span className="dl-c-prog">
+              <span
+                className={`mini-bar ratio${over ? " over" : ""}`}
+                style={{ "--p": 1, "--r": Math.min(overlayW, 1) } as CSSProperties}
+              >
+                <i />
+                <b />
+              </span>
+              <span className="mini-pct ratio" title={`ratio ${ratio.toFixed(2)}`}>
+                {ratio.toFixed(2)}
+              </span>
+            </span>
+          );
+        }
         return (
           <span className="dl-c-prog">
             <span
@@ -1226,7 +1291,9 @@ function Card({
         );
       case "status":
         return (
-          <span className={`dl-status ${STATUS_CLASS[task.status]}`}>
+          <span
+            className={`dl-status ${STATUS_CLASS[task.status]} st-${task.status}`}
+          >
             {STATUS_LABEL[task.status]}
           </span>
         );

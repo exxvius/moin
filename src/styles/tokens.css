@@ -87,6 +87,9 @@
   --glass-border: oklch(100% 0 0 / 0.1);
   --glass-highlight: inset 0 1px 0 oklch(100% 0 0 / 0.09);
   --glass-shadow: 0 22px 48px -28px oklch(0% 0 0 / 0.8);
+  /* Drop shadow lifting the pinned list header off the list. In dark mode it
+     reads as depth; light mode drops it (a dark blur there just looks muddy). */
+  --header-shadow: 0 12px 30px -14px oklch(0% 0 0 / 0.6);
   --blur: blur(16px) saturate(1.2);
 
   --accent-grad: linear-gradient(
@@ -139,6 +142,7 @@
     --glass-border: oklch(0% 0 0 / 0.08);
     --glass-highlight: inset 0 1px 0 oklch(100% 0 0 / 0.7);
     --glass-shadow: 0 16px 34px -22px oklch(0% 0 0 / 0.22);
+    --header-shadow: 0 0 0 0 transparent;
     --blur: blur(14px) saturate(1.1);
     --accent-grad: linear-gradient(
       180deg,
@@ -186,6 +190,7 @@
   --glass-border: oklch(0% 0 0 / 0.08);
   --glass-highlight: inset 0 1px 0 oklch(100% 0 0 / 0.7);
   --glass-shadow: 0 16px 34px -22px oklch(0% 0 0 / 0.22);
+  --header-shadow: 0 0 0 0 transparent;
   --blur: blur(14px) saturate(1.1);
   --accent-grad: linear-gradient(
     180deg,

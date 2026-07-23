@@ -165,7 +165,7 @@ function Tile({
   icon: typeof Info;
   label: string;
   value: React.ReactNode;
-  tone?: "down" | "up" | "ratio";
+  tone?: "down" | "up" | "ratio" | "seeders";
 }) {
   return (
     <div className={`tg-tile${tone ? ` ${tone}` : ""}`}>
@@ -234,22 +234,27 @@ function GeneralTab({
         <Tile
           icon={ArrowDown}
           label="Download"
-          tone="down"
+          tone={live && speed > 0 ? "down" : undefined}
           value={live ? formatSpeed(speed) : "—"}
         />
         <Tile
           icon={ArrowUp}
           label="Upload"
-          tone="up"
+          tone={(task.up_speed ?? 0) > 0 ? "up" : undefined}
           value={live ? formatSpeed(task.up_speed ?? 0) : "—"}
         />
         <Tile
           icon={Scale}
           label="Ratio"
-          tone="ratio"
+          tone={ratio > 0 ? "ratio" : undefined}
           value={ratio.toFixed(2)}
         />
-        <Tile icon={Sprout} label="Seeders" value={task.seeders ?? 0} />
+        <Tile
+          icon={Sprout}
+          label="Seeders"
+          tone={(task.seeders ?? 0) > 0 ? "seeders" : undefined}
+          value={task.seeders ?? 0}
+        />
         <Tile icon={Users} label="Peers" value={task.peers ?? 0} />
         <Tile
           icon={Clock}
