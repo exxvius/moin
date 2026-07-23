@@ -2088,17 +2088,21 @@
 .dl-card.selected {
   --tint-start: 0%;
   --tint-end: 130%;
-  /* Category color when categorized, else a neutral white edge. */
+  /* Category color when categorized, else the theme accent. */
   border-color: color-mix(
     in oklab,
-    var(--cat, white) 32%,
+    var(--cat, var(--accent)) 32%,
     var(--glass-border)
   );
 }
 /* Selected rows read as a plain 1px tone-tinted border (brighter than hover),
    without the extra inset ring that made the edge thicker. */
 .dl-card.selected {
-  border-color: color-mix(in oklab, var(--cat, white) 55%, var(--glass-border));
+  border-color: color-mix(
+    in oklab,
+    var(--cat, var(--accent)) 55%,
+    var(--glass-border)
+  );
 }
 /* Archived cards aren't status-coloured (no live status to reflect). */
 .dl-card.archived {

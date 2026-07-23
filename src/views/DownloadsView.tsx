@@ -517,10 +517,10 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
     const t = taskById.get(id);
     if (!t) return null;
     // The card's glow follows its category color when it has one, matching the
-    // background tint; uncategorized rows get a neutral white glow.
+    // background tint; uncategorized rows glow in the theme accent.
     const cat = findCategory(store.categories, t.category);
     if (cat?.color) return categorySwatch(cat.color);
-    return "white";
+    return "var(--accent)";
   };
 
   // Ctrl/Cmd+A selects everything visible; Esc clears (unless a menu owns Esc).
