@@ -445,6 +445,20 @@ impl Engine {
         let source = source.trim().to_string();
         let meta = parse_meta(&source)?;
 
+        // Reject a torrent that's already in the list (same info hash, not archived)
+        // so the same magnet added twice doesn't run two copies over one folder.
+        if let Some(hash) = &meta.info_hash {
+            let dupe = {
+                let tasks = self.inner.tasks.lock().unwrap();
+                tasks
+                    .values()
+                    .any(|e| !e.task.archived && e.task.info_hash.as_deref() == Some(hash.as_str()))
+            };
+            if dupe {
+                return Err("that torrent is already in your downloads".to_string());
+            }
+        }
+
         // A real display name if the source carried one, else the info hash, else
         // a plain fallback — enough for the card to show something immediately.
         let display = meta

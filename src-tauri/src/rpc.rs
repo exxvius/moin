@@ -154,8 +154,16 @@ fn handle_add(engine: &Engine, fallback_dir: &Path, rt: &Handle, mut request: Re
 
     // Queuing ends in `tokio::spawn` inside the engine, which needs a runtime in
     // scope — this OS thread has none of its own, so borrow the engine's.
+    // A magnet link routes to the torrent engine instead of the HTTP path: added
+    // with all files, the default folder, and the same auto-category rules. The
+    // torrent then resolves its metadata as it downloads.
     let _guard = rt.enter();
-    match engine.add_http(req.url, dir, category, req.headers, req.filename) {
+    let result = if is_magnet(&req.url) {
+        engine.add_torrent(req.url, dir, category, Vec::new(), None, Vec::new())
+    } else {
+        engine.add_http(req.url, dir, category, req.headers, req.filename)
+    };
+    match result {
         Ok(task) => match serde_json::to_string(&task) {
             Ok(json) => respond_json(request, 200, &json),
             Err(_) => respond_json(request, 500, r#"{"error":"couldn't serialize the task"}"#),
@@ -165,6 +173,11 @@ fn handle_add(engine: &Engine, fallback_dir: &Path, rt: &Handle, mut request: Re
             respond_json(request, 400, &msg);
         }
     }
+}
+
+/// Whether a captured URL is a magnet link (routed to the torrent engine).
+fn is_magnet(url: &str) -> bool {
+    url.trim_start().to_ascii_lowercase().starts_with("magnet:")
 }
 
 /// Whether the request carries `Authorization: Bearer <token>` matching `token`.

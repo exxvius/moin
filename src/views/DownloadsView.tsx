@@ -241,7 +241,10 @@ function computeStats(tasks: Task[]): Stats {
   let failed = 0;
   let timeMs = 0;
   for (const t of tasks) {
-    totalDownloaded += t.received;
+    // A checking torrent's `received` is pieces being verified on disk, not data
+    // downloaded this run — counting it would inflate the all-time total, then snap
+    // back when checking ends. Only count real downloaded bytes.
+    if (t.status !== "checking") totalDownloaded += t.received;
     timeMs += t.active_ms;
     if (t.active_ms > 0) {
       speedBytes += t.received;
