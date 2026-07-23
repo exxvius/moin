@@ -61,7 +61,7 @@ async-trait = "0.1"
 # upstream keeps internal, so we can draw a piece bar + availability figure.
 # default-features off drops the bundled http-api/webui/axum surface we don't use;
 # default-tls keeps the TLS stack on native TLS (no NASM/aws-lc).
-librqbit = { git = "https://github.com/exxvius/rqbit", rev = "434c37094f18baf3f3d0fe29fe5e7d267894582e", default-features = false, features = ["default-tls"] }
+librqbit = { git = "https://github.com/exxvius/rqbit", rev = "164c7ec4456dacaac9cd642ef181c845d58d5c88", default-features = false, features = ["default-tls"] }
 
 # Download registry + resume state.
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -87,11 +87,3 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
-
-# TEMPORARY local override: the rqbit fork change (dont_restore_persisted, fork
-# commit 164c7ec4) isn't pushed to github yet, so build against the local clone. The
-# `rev` above stays at the last pushed commit so cargo can still resolve the source;
-# this patch swaps in the newer local code. Once the fork is pushed, delete this
-# block and bump the `rev` to 164c7ec4.
-[patch."https://github.com/exxvius/rqbit"]
-librqbit = { path = "D:/Tools/rqbit-fork/crates/librqbit" }
