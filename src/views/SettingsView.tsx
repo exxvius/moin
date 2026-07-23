@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Heart } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Select } from "../components/Select";
@@ -9,8 +10,10 @@ import { formatBytes } from "../lib/format";
 import { ACCENTS, type Accent } from "../lib/accent";
 import type { BackendInfo, Settings, ToolStatus, UpdateInfo } from "../lib/types";
 
-/** The project's public repo — the About card links here and updates come from it. */
-const REPO_URL = "https://github.com/exxvius/moin";
+/** The author's profile, credited at the bottom of the settings view. */
+const AUTHOR_URL = "https://github.com/exxvius";
+/** Upstream of the built-in BitTorrent engine, credited in the About card. */
+const RQBIT_URL = "https://github.com/ikatson/rqbit";
 
 interface Props {
   accent: Accent;
@@ -768,6 +771,17 @@ export function SettingsView({
       </div>
 
       <AboutCard />
+
+      <div className="settings-credit dim">
+        Developed by{" "}
+        <button
+          className="link-btn"
+          onClick={() => openUrl(AUTHOR_URL).catch(() => {})}
+        >
+          Exxvius
+        </button>
+        <Heart className="credit-heart" size={13} strokeWidth={2.25} />
+      </div>
     </div>
   );
 }
@@ -876,7 +890,7 @@ function AboutCard() {
 
       <div className="setting-row">
         <div>
-          <div className="setting-label">Updates</div>
+          <div className="setting-label">moin{version ? ` ${version}` : ""}</div>
           <div className={`dim${error ? " update-error" : ""}`}>{status}</div>
         </div>
         {update?.available ? (
@@ -897,15 +911,15 @@ function AboutCard() {
         <pre className="update-notes">{update.notes}</pre>
       )}
 
-      <div className="about-foot dim">
-        <span>
-          moin{version ? ` ${version}` : ""} · Developed by{" "}
-          <button className="link-btn" onClick={() => openUrl(REPO_URL).catch(() => {})}>
-            Exxvius
-          </button>
-        </span>
-        <span>Free and open source under the MIT License.</span>
-      </div>
+      <p className="dim about-note">
+        moin is free and open source under the MIT License. Its built-in
+        BitTorrent engine is powered by{" "}
+        <button className="link-btn" onClick={() => openUrl(RQBIT_URL).catch(() => {})}>
+          librqbit
+        </button>
+        . External tools — aria2c, yt-dlp, and FFmpeg — aren't bundled: moin
+        fetches them on demand, and each stays under its own license.
+      </p>
     </div>
   );
 }

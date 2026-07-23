@@ -976,16 +976,30 @@
   color: var(--bad, #e5484d);
 }
 
-/* The About card footer: credit + license, stacked and quiet. */
-.about-foot {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: var(--space-4);
+/* The About card's license + credits blurb, quiet under the update row. */
+.about-note {
+  margin: var(--space-4) 0 0;
   padding-top: var(--space-4);
   border-top: 1px solid
     color-mix(in oklab, var(--glass-border) 60%, transparent);
   font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+/* The "Developed by Exxvius ♥" line — outside the cards, centered at the very
+   bottom of the settings view. */
+.settings-credit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin-top: var(--space-5);
+  padding-bottom: var(--space-2);
+  font-size: var(--text-sm);
+}
+.credit-heart {
+  color: var(--accent);
+  fill: currentColor;
 }
 /* An inline text link rendered as a button (keeps click handling in JS). */
 .link-btn {
