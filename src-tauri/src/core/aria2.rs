@@ -1,26 +1,36 @@
 //! The aria2c backend: a selectable alternative to the built-in engine for direct
-//! HTTP downloads (torrent joins it in a later phase). moin runs one long-lived
-//! `aria2c --enable-rpc` daemon and drives every transfer over JSON-RPC, so
-//! pause/resume/cancel/progress and multi-connection splitting behave the same as
-//! the embedded backend from the user's side.
+//! HTTP downloads and torrents. moin runs one long-lived `aria2c --enable-rpc`
+//! daemon and drives every transfer over JSON-RPC, so pause/resume/cancel/progress
+//! and multi-connection splitting behave the same as the embedded backend from the
+//! user's side.
 //!
-//! Files line up with moin's own convention: aria2 writes to the same `<dest>.part`
-//! the engine expects and we reuse [`http::finalize`] for the rename, so the
-//! engine's cleanup and resume logic need no special cases. aria2's own `.aria2`
-//! control sidecar is the one extra artifact, and this backend cleans it up itself.
+//! For **HTTP**, files line up with moin's own convention: aria2 writes to the same
+//! `<dest>.part` the engine expects and we reuse [`http::finalize`] for the rename,
+//! so the engine's cleanup and resume logic need no special cases. aria2's own
+//! `.aria2` control sidecar is the one extra artifact, cleaned up here.
+//!
+//! For **torrents**, aria2 writes the real files straight into the task's output
+//! folder (no `.part`), seeds with the configured ratio/time limits, and reports a
+//! swarm tick (up-speed, peers, seeders/leechers). Metadata resolution and the live
+//! detail panel stay with the built-in engine — aria2 downloads from the `.torrent`
+//! the embedded backend already resolved and cached.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
+use base64::Engine as _;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
-use super::backend::{Control, DownloadBackend, Outcome, ProgressFn, Signal, TransferOpts};
+use super::backend::{
+    Control, DownloadBackend, Outcome, ProgressFn, Signal, TorrentNet, TorrentTick, TransferOpts,
+};
 use super::fsattr;
 use super::http;
-use super::task::{Task, TaskKind};
+use super::task::{Task, TaskKind, TaskStatus};
 use super::tool::{new_command, Aria2Tool};
+use super::torrent::meta_path;
 
 /// How often we poll aria2 for a task's progress.
 const POLL: Duration = Duration::from_millis(300);
@@ -29,6 +39,11 @@ const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(8);
 
 pub struct Aria2Backend {
     tool: Arc<Aria2Tool>,
+    /// Where the embedded engine caches resolved `.torrent` files — aria2 reads
+    /// them to add a torrent without re-resolving a magnet from the swarm.
+    data_dir: PathBuf,
+    /// Latest torrent rate caps (from settings); applied per torrent download.
+    net: StdMutex<TorrentNet>,
     daemon: Mutex<Option<Daemon>>,
 }
 
@@ -47,9 +62,11 @@ struct Rpc {
 }
 
 impl Aria2Backend {
-    pub fn new(tool: Arc<Aria2Tool>) -> Self {
+    pub fn new(tool: Arc<Aria2Tool>, data_dir: PathBuf) -> Self {
         Self {
             tool,
+            data_dir,
+            net: StdMutex::new(default_net()),
             daemon: Mutex::new(None),
         }
     }
@@ -90,12 +107,18 @@ impl DownloadBackend for Aria2Backend {
     }
 
     fn supports(&self, kind: TaskKind) -> bool {
-        // HTTP today; torrent lands alongside the librqbit work.
-        matches!(kind, TaskKind::Http)
+        // HTTP over addUri, torrents over addTorrent. Media is yt-dlp's job later.
+        matches!(kind, TaskKind::Http | TaskKind::Torrent)
     }
 
     fn available(&self) -> bool {
         self.tool.is_available()
+    }
+
+    fn reconfigure(&self, net: super::backend::NetConfig) {
+        // aria2 builds its own client per RPC call, so only the torrent rate caps
+        // matter here; they're read when a torrent download is added.
+        *self.net.lock().unwrap() = net.torrent;
     }
 
     async fn run(
@@ -105,10 +128,23 @@ impl DownloadBackend for Aria2Backend {
         control: Control,
         progress: ProgressFn,
     ) -> Outcome {
-        if task.kind != TaskKind::Http {
-            return Outcome::Failed("aria2c can't handle this source yet".to_string());
+        match task.kind {
+            TaskKind::Http => self.run_http(task, opts, control, progress).await,
+            TaskKind::Torrent => self.run_torrent(task, opts, control, progress).await,
+            _ => Outcome::Failed("aria2c can't handle this source yet".to_string()),
         }
+    }
+}
 
+impl Aria2Backend {
+    /// Direct HTTP download over aria2's `addUri`, writing to moin's `.part`.
+    async fn run_http(
+        &self,
+        task: Task,
+        opts: TransferOpts,
+        control: Control,
+        progress: ProgressFn,
+    ) -> Outcome {
         let rpc = match self.rpc().await {
             Ok(r) => r,
             Err(e) => return Outcome::Failed(e),
@@ -172,6 +208,221 @@ impl DownloadBackend for Aria2Backend {
             &progress,
         )
         .await
+    }
+
+    /// Torrent download + seed over aria2's `addTorrent`. The real files land in the
+    /// task's output folder; aria2 seeds until the ratio/time limit, then completes.
+    async fn run_torrent(
+        &self,
+        task: Task,
+        opts: TransferOpts,
+        control: Control,
+        progress: ProgressFn,
+    ) -> Outcome {
+        let rpc = match self.rpc().await {
+            Ok(r) => r,
+            Err(e) => return Outcome::Failed(e),
+        };
+
+        // aria2 downloads from the `.torrent` the embedded engine already resolved
+        // and cached (or a local `.torrent` file the task points at). A bare magnet
+        // with no cached metadata would drag in aria2's separate metadata phase, so
+        // we require the resolved file instead — the add modal always caches it.
+        let bytes = match self.torrent_bytes(&task).await {
+            Some(b) => b,
+            None => {
+                return Outcome::Failed(
+                    "couldn't read the torrent's metadata — re-add it so it resolves".to_string(),
+                )
+            }
+        };
+
+        let mut options = json!({
+            "dir": task.dest.clone(),
+            "continue": "true",
+            "bt-save-metadata": "true",
+            // Always set the ratio explicitly: aria2 defaults to 1.0, but moin's
+            // "unlimited" means seed until stopped, which aria2 spells as 0.0.
+            "seed-ratio": if opts.seed_ratio_limit > 0.0 {
+                format!("{}", opts.seed_ratio_limit)
+            } else {
+                "0.0".to_string()
+            },
+        });
+        // Only set a seed time when there's a limit: aria2 reads seed-time=0 as "do
+        // not seed at all", which is the opposite of moin's "no time limit".
+        if !opts.seed_time_limit.is_zero() {
+            options["seed-time"] = json!(format!("{}", opts.seed_time_limit.as_secs_f64() / 60.0));
+        }
+        // Selected files as aria2's 1-based `select-file` list; omitted = all files.
+        if let Some(list) = select_file(&task) {
+            options["select-file"] = json!(list);
+        }
+        // Torrent rate caps from settings (per download, so HTTP over aria2 stays
+        // unthrottled). Bytes/sec as a plain integer, which aria2 accepts.
+        let net = *self.net.lock().unwrap();
+        if let Some(bps) = net.download_bps {
+            options["max-download-limit"] = json!(bps.get().to_string());
+        }
+        if let Some(bps) = net.upload_bps {
+            options["max-upload-limit"] = json!(bps.get().to_string());
+        }
+
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let gid = match rpc
+            .call("aria2.addTorrent", vec![json!(b64), json!([]), options])
+            .await
+        {
+            Ok(Value::String(g)) => g,
+            Ok(_) => return Outcome::Failed("aria2 returned an unexpected reply".to_string()),
+            Err(e) => return Outcome::Failed(format!("aria2 couldn't add the torrent: {e}")),
+        };
+
+        poll_torrent(&rpc, &gid, &control, &progress).await
+    }
+
+    /// The `.torrent` bytes for a task: the embedded engine's cached copy first
+    /// (keyed by info hash), else a local `.torrent` the task's source points at.
+    async fn torrent_bytes(&self, task: &Task) -> Option<Vec<u8>> {
+        if let Some(hash) = &task.info_hash {
+            if let Ok(bytes) = tokio::fs::read(meta_path(&self.data_dir, hash)).await {
+                return Some(bytes);
+            }
+        }
+        if !is_magnet(&task.url) {
+            return tokio::fs::read(&task.url).await.ok();
+        }
+        None
+    }
+}
+
+/// Drive one aria2 torrent GID to a terminal [`Outcome`], reporting a swarm tick and
+/// honoring pause/cancel. A finished torrent keeps seeding (aria2 stays `active`
+/// with the ratio/time limit) until aria2 reports `complete` or moin stops it.
+async fn poll_torrent(rpc: &Rpc, gid: &str, control: &Control, progress: &ProgressFn) -> Outcome {
+    loop {
+        let status = match rpc
+            .call(
+                "aria2.tellStatus",
+                vec![
+                    json!(gid),
+                    json!([
+                        "status",
+                        "completedLength",
+                        "totalLength",
+                        "uploadLength",
+                        "uploadSpeed",
+                        "connections",
+                        "numSeeders",
+                        "errorMessage"
+                    ]),
+                ],
+            )
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => return Outcome::Failed(format!("lost contact with aria2: {e}")),
+        };
+
+        let completed = num(&status, "completedLength");
+        let total = num(&status, "totalLength");
+        // The selected files are done once we've fetched their whole size.
+        let finished = total > 0 && completed >= total;
+
+        match control.signal() {
+            Signal::Pause => {
+                stop(rpc, gid).await;
+                // Pausing a finished torrent stops seeding → done; otherwise parked.
+                return if finished {
+                    Outcome::Completed
+                } else {
+                    Outcome::Paused
+                };
+            }
+            Signal::Cancel => {
+                stop(rpc, gid).await;
+                return Outcome::Canceled;
+            }
+            Signal::Run => {}
+        }
+
+        let state = status.get("status").and_then(Value::as_str).unwrap_or("");
+        match state {
+            "complete" => {
+                let _ = rpc
+                    .call("aria2.removeDownloadResult", vec![json!(gid)])
+                    .await;
+                return Outcome::Completed;
+            }
+            "error" => {
+                let msg = status
+                    .get("errorMessage")
+                    .and_then(Value::as_str)
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or("torrent failed")
+                    .to_string();
+                let _ = rpc
+                    .call("aria2.removeDownloadResult", vec![json!(gid)])
+                    .await;
+                return Outcome::Failed(msg);
+            }
+            "removed" => return Outcome::Canceled,
+            _ => {}
+        }
+
+        let peers = num(&status, "connections") as u32;
+        let seeders = num(&status, "numSeeders") as u32;
+        let tick = TorrentTick {
+            uploaded: num(&status, "uploadLength"),
+            up_speed: num(&status, "uploadSpeed"),
+            peers,
+            seeders,
+            leechers: peers.saturating_sub(seeders),
+            status: if finished {
+                TaskStatus::Seeding
+            } else {
+                TaskStatus::Downloading
+            },
+        };
+        progress(completed, (total > 0).then_some(total), Some(tick));
+        tokio::time::sleep(POLL).await;
+    }
+}
+
+/// aria2's 1-based `select-file` value for a partial selection, or `None` when
+/// every file is picked (download the whole torrent).
+fn select_file(task: &Task) -> Option<String> {
+    if task.files.is_empty() || task.files.iter().all(|f| f.selected) {
+        return None;
+    }
+    let list = task
+        .files
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.selected)
+        .map(|(i, _)| (i + 1).to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    (!list.is_empty()).then_some(list)
+}
+
+/// Whether a source string is a magnet link (aria2 would resolve its metadata
+/// itself, which we avoid by using the embedded engine's cached `.torrent`).
+fn is_magnet(source: &str) -> bool {
+    source
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("magnet:")
+}
+
+/// The rate caps aria2 starts with before settings are pushed in via `reconfigure`.
+fn default_net() -> TorrentNet {
+    TorrentNet {
+        listen_port: 4240,
+        dht: true,
+        upnp: true,
+        download_bps: None,
+        upload_bps: None,
     }
 }
 

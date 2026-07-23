@@ -35,6 +35,9 @@ tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# aria2's JSON-RPC `addTorrent` takes the .torrent as base64, so the aria2 torrent
+# backend encodes the cached file with this.
+base64 = "0.22"
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -157,7 +157,7 @@ impl Engine {
         ));
         let backends: Vec<Arc<dyn DownloadBackend>> = vec![
             Arc::new(EmbeddedBackend::new(data_dir.clone())),
-            Arc::new(Aria2Backend::new(tool.clone())),
+            Arc::new(Aria2Backend::new(tool.clone(), data_dir.clone())),
         ];
         // Apply the persisted network settings (e.g. connect timeout) to the
         // backends' clients before anything runs.
@@ -284,14 +284,14 @@ impl Engine {
         if source.is_empty() {
             return Err("no torrent given".to_string());
         }
-        let backend = self
+        // Resolution + the `.torrent` cache are backend-independent, so the built-in
+        // engine always does them — aria2 then downloads from the cached metadata.
+        let resolved = self
             .inner
-            .backend_for(TaskKind::Torrent)
-            .ok_or_else(|| "no torrent backend is available".to_string())?;
-        let resolved = backend
+            .embedded()
             .resolve_torrent(&source)
             .await
-            .ok_or_else(|| "this backend can't resolve torrents".to_string())??;
+            .ok_or_else(|| "couldn't resolve the torrent".to_string())??;
 
         // Suggest a category from the torrent name, then the folder it implies.
         let name = resolved.name.clone().unwrap_or_default();
@@ -340,7 +340,7 @@ impl Engine {
         backend
             .torrent_details(&info_hash)
             .await
-            .ok_or_else(|| "this backend can't inspect torrents".to_string())?
+            .ok_or_else(|| "live torrent detail isn't available for this engine".to_string())?
     }
 
     /// Change which files a torrent downloads (`selected` = indices to keep),
@@ -364,7 +364,7 @@ impl Engine {
         backend
             .set_torrent_files(&info_hash, &selected)
             .await
-            .ok_or_else(|| "this backend can't change torrent files".to_string())??;
+            .ok_or_else(|| "changing files live isn't supported by this engine".to_string())??;
 
         // Reflect the new selection on the task. We deliberately do NOT delete a
         // deselected file from disk: librqbit tracks piece completion internally,
@@ -652,10 +652,14 @@ impl Engine {
     /// Ask the torrent backend to detach a torrent from its session, releasing the
     /// file handles. Files are always kept — moin deletes data itself.
     async fn remove_torrent_from_session(&self, info_hash: &str) -> Result<(), String> {
-        let Some(backend) = self.inner.backend_for(TaskKind::Torrent) else {
-            return Ok(());
-        };
-        backend.remove_torrent(info_hash).await.unwrap_or(Ok(()))
+        // The built-in engine owns the cached `.torrent` and the librqbit session,
+        // so it does the detach/cache-drop even when aria2 ran the download (whose
+        // own transfer is already stopped by the run loop's cancel).
+        self.inner
+            .embedded()
+            .remove_torrent(info_hash)
+            .await
+            .unwrap_or(Ok(()))
     }
 
     async fn archive(&self, id: &str, delete_file: bool) -> Result<(), String> {
@@ -1060,6 +1064,17 @@ impl Engine {
 }
 
 impl Inner {
+    /// The built-in engine, always registered. It's the canonical torrent
+    /// metadata resolver + owner of the cached `.torrent` files, so metadata and
+    /// cache-cleanup ops route here regardless of which engine downloads.
+    fn embedded(&self) -> Arc<dyn DownloadBackend> {
+        self.backends
+            .iter()
+            .find(|b| b.id() == "embedded")
+            .cloned()
+            .expect("the built-in backend is always registered")
+    }
+
     fn backend_for(&self, kind: TaskKind) -> Option<Arc<dyn DownloadBackend>> {
         let want = {
             let s = self.settings.lock().unwrap();
@@ -1611,11 +1626,10 @@ impl Inner {
                 inner.emitter.updated(&task);
                 emit_move(&inner, &id, 0, task.total);
                 tokio::spawn(async move {
-                    // Detach from the session so the files aren't held open.
+                    // Detach from the session so the files aren't held open (the
+                    // built-in engine owns the session + cached metadata).
                     if let Some(hash) = &info_hash {
-                        if let Some(b) = inner.backend_for(TaskKind::Torrent) {
-                            let _ = b.remove_torrent(hash).await;
-                        }
+                        let _ = inner.embedded().remove_torrent(hash).await;
                     }
                     let result =
                         move_torrent_files(old_dest, new_dest.clone(), files, own_dir).await;
