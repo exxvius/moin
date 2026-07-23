@@ -155,8 +155,8 @@ const COLUMNS: Column[] = [
   { id: "status", label: "Status", width: "100px", min: 100, priority: 60 },
   { id: "speed", label: "Speed", num: true, width: "84px", min: 84, priority: 40 },
   { id: "eta", label: "ETA", num: true, width: "68px", min: 68, priority: 30 },
-  { id: "added", label: "Added", num: true, width: "108px", min: 108, priority: 20 },
-  { id: "completed", label: "Completed", num: true, width: "108px", min: 108, priority: 10 },
+  { id: "added", label: "Added", num: true, width: "140px", min: 140, priority: 20 },
+  { id: "completed", label: "Completed", num: true, width: "140px", min: 140, priority: 10 },
 ];
 
 // Archived downloads can't be resumed, so their live columns (progress, status,
@@ -165,8 +165,8 @@ const ARCHIVED_COLUMNS: Column[] = [
   { id: "name", label: "Name", width: "minmax(140px, 1fr)", min: 140, priority: 80 },
   { id: "size", label: "Size", num: true, width: "92px", min: 92, priority: 50 },
   { id: "avgspeed", label: "Avg speed", num: true, width: "104px", min: 104, priority: 40 },
-  { id: "added", label: "Added", num: true, width: "130px", min: 130, priority: 20 },
-  { id: "completed", label: "Completed", num: true, width: "130px", min: 130, priority: 10 },
+  { id: "added", label: "Added", num: true, width: "140px", min: 140, priority: 20 },
+  { id: "completed", label: "Completed", num: true, width: "140px", min: 140, priority: 10 },
 ];
 
 // Drop the lowest-priority columns until the rest fit the available width. Name
