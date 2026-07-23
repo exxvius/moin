@@ -99,11 +99,18 @@ pub fn run() {
                 let _ = tx.send(tokio::runtime::Handle::current());
             });
             if let Ok(rt) = rx.recv() {
-                rpc::spawn(engine.clone(), fallback_dir, rt);
+                rpc::spawn(engine.clone(), fallback_dir, rt.clone());
+                // Pick back up any torrent that was downloading or seeding at last
+                // exit (loaded as Queued). Runs on the tokio runtime so the queue
+                // can spawn the transfers.
+                let resume = engine.clone();
+                rt.spawn(async move { resume.resume_pending() });
             } else {
                 tracing::warn!(
                     "couldn't capture the tokio runtime handle; browser integration off"
                 );
+                // Still resume, just off Tauri's own runtime.
+                engine.resume_pending();
             }
 
             app.manage(AppState { engine });
@@ -142,8 +149,17 @@ pub fn run() {
             commands::reorder_categories,
             commands::move_to_category,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running moin");
+        .build(tauri::generate_context!())
+        .expect("error while running moin")
+        .run(|app_handle, event| {
+            // On exit, wind the engines down cleanly (flush torrent resume state,
+            // stop the aria2 daemon) before the process goes away.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                if let Some(state) = app_handle.try_state::<AppState>() {
+                    tauri::async_runtime::block_on(state.engine.shutdown());
+                }
+            }
+        });
 }
 
 fn init_logging(data_dir: &std::path::Path) {

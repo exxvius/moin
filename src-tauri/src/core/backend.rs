@@ -195,6 +195,11 @@ pub trait DownloadBackend: Send + Sync {
         control: Control,
         progress: ProgressFn,
     ) -> Outcome;
+
+    /// Cleanly wind down before the app exits — flush resume state, stop any
+    /// managed subprocess. Default no-op; a backend with an external daemon (aria2)
+    /// uses it to shut down gracefully so its control files are saved.
+    async fn shutdown(&self) {}
 }
 
 /// A backend's identity + capabilities, sent to the settings UI.

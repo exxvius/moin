@@ -134,6 +134,20 @@ impl DownloadBackend for Aria2Backend {
             _ => Outcome::Failed("aria2c can't handle this source yet".to_string()),
         }
     }
+
+    async fn shutdown(&self) {
+        // Ask the daemon to exit cleanly so it saves each torrent's control file
+        // (auto-save already runs every second, so this just tightens the window)
+        // and no process lingers past moin. Then drop the child handle.
+        let mut guard = self.daemon.lock().await;
+        if let Some(daemon) = guard.take() {
+            let _ = daemon.rpc.call("aria2.shutdown", vec![]).await;
+            // Give it a beat to flush and exit before the handle drops (which would
+            // kill_on_drop it); ignore errors, this is best-effort cleanup.
+            let mut child = daemon.child;
+            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+        }
+    }
 }
 
 impl Aria2Backend {

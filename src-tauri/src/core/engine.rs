@@ -127,23 +127,35 @@ impl Engine {
 
         let mut tasks = HashMap::new();
         for mut task in store.all()? {
-            // Anything that was mid-flight when we last quit comes back paused —
-            // never silently resume a download the user didn't ask to restart. A
-            // move interrupted by a quit is treated the same: the file is still at
-            // its recorded path (the dest only advances after the move lands), so
-            // resuming from where it sits is safe.
-            if matches!(
+            let torrent = task.is_torrent();
+            if torrent
+                && matches!(
+                    task.status,
+                    TaskStatus::Connecting
+                        | TaskStatus::Checking
+                        | TaskStatus::Downloading
+                        | TaskStatus::Seeding
+                )
+            {
+                // A torrent that was downloading or seeding at last exit resumes on
+                // its own: re-queued so the run loop re-adds it to the session, where
+                // librqbit fastresume (or aria2's saved control file) carries it on
+                // from the pieces already on disk. A torrent the user had paused
+                // stays paused. (The store already zeroes swarm readings on load.)
+                task.status = TaskStatus::Queued;
+            } else if matches!(
                 task.status,
                 TaskStatus::Connecting
                     | TaskStatus::Checking
                     | TaskStatus::Downloading
                     | TaskStatus::Moving
             ) {
+                // A direct download (or a torrent interrupted mid-move) comes back
+                // paused — we never silently resume a plain download the user didn't
+                // restart, and a move's file is still at its recorded path.
                 task.status = TaskStatus::Paused;
-            }
-            // A torrent that was seeding isn't actually seeding until it's re-added
-            // to the session (a resume milestone); settle it as done for now.
-            if task.status == TaskStatus::Seeding {
+            } else if task.status == TaskStatus::Seeding {
+                // A non-torrent can't seed; settle any stray record as done.
                 task.status = TaskStatus::Completed;
             }
             tasks.insert(task.id.clone(), Entry::idle(task));
@@ -556,6 +568,25 @@ impl Engine {
         };
         if let Some(task) = updated {
             self.persist_emit(&task);
+        }
+    }
+
+    /// Kick the queue once at startup so torrents that were downloading or seeding
+    /// when moin last closed pick back up (their status was set to `Queued` while
+    /// loading). Must be called from within the tokio runtime — pump spawns the
+    /// run tasks. HTTP downloads stay paused, so they aren't affected.
+    pub fn resume_pending(&self) {
+        Inner::pump(self.inner.clone());
+    }
+
+    /// Cleanly stop the download engines before the app exits: pause active
+    /// transfers so their resume state flushes, and shut the aria2 daemon down so
+    /// it saves its control files and doesn't linger. Best-effort — a hard kill
+    /// still resumes from the periodically-saved state, this just tightens it.
+    pub async fn shutdown(&self) {
+        let backends = self.inner.backends.clone();
+        for b in backends {
+            b.shutdown().await;
         }
     }
 
