@@ -99,7 +99,10 @@ pub fn run() {
                 let _ = tx.send(tokio::runtime::Handle::current());
             });
             if let Ok(rt) = rx.recv() {
-                rpc::spawn(engine.clone(), fallback_dir, rt.clone());
+                rpc::spawn(engine.clone(), fallback_dir.clone(), rt.clone());
+                // Poll each category's watched folders for dropped .torrent files
+                // and auto-add them. No-op until a category configures a folder.
+                core::watch::spawn(engine.clone(), fallback_dir, rt.clone());
                 // Pick back up any torrent that was downloading or seeding at last
                 // exit (loaded as Queued). Runs on the tokio runtime so the queue
                 // can spawn the transfers.

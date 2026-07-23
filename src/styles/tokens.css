@@ -67,6 +67,11 @@
   --text-dim: oklch(74% 0.012 240);
   --text-faint: oklch(60% 0.014 240);
 
+  /* Category-only neutral swatches, reversed between themes so each lands on the
+     visible side of the background. In dark mode Black reads light, White dark. */
+  --cat-black: oklch(97% 0 0);
+  --cat-white: oklch(26% 0 0);
+
   --accent: oklch(80% var(--accent-c) var(--accent-h));
   --accent-2: oklch(
     72% calc(var(--accent-c) + 0.02) calc(var(--accent-h) + 10)
@@ -126,6 +131,8 @@
     --text: oklch(24% 0.02 250);
     --text-dim: oklch(44% 0.015 250);
     --text-faint: oklch(56% 0.014 250);
+    --cat-black: oklch(26% 0 0);
+    --cat-white: oklch(97% 0 0);
     --accent: oklch(58% var(--accent-c) var(--accent-h));
     --accent-2: oklch(
       52% calc(var(--accent-c) + 0.01) calc(var(--accent-h) + 10)
@@ -174,6 +181,8 @@
   --text: oklch(24% 0.02 250);
   --text-dim: oklch(44% 0.015 250);
   --text-faint: oklch(56% 0.014 250);
+  --cat-black: oklch(26% 0 0);
+  --cat-white: oklch(97% 0 0);
   --accent: oklch(58% var(--accent-c) var(--accent-h));
   --accent-2: oklch(
     52% calc(var(--accent-c) + 0.01) calc(var(--accent-h) + 10)

@@ -144,8 +144,16 @@ import {
   BarChart3,
   PieChart,
   Activity,
+  createLucideIcon,
   type LucideIcon,
 } from "lucide-react";
+
+// A custom mark (three "X" strokes), supplied by the author. Built with Lucide's
+// factory so it takes the same size/color props as the rest of the set — the svg
+// wrapper (viewBox, currentColor stroke, round caps) comes from Lucide's default.
+const Xxx = createLucideIcon("Xxx", [
+  ["path", { d: "m10 8l4 8m-4 0l4-8m3 0l4 8m-4 0l4-8M3 8l4 8m-4 0l4-8", key: "xxx" }],
+]);
 
 /** Ordered list for the picker grid: `[id, component]`. */
 export const CATEGORY_ICONS: readonly (readonly [string, LucideIcon])[] = [
@@ -290,6 +298,7 @@ export const CATEGORY_ICONS: readonly (readonly [string, LucideIcon])[] = [
   ["bar-chart", BarChart3],
   ["pie-chart", PieChart],
   ["activity", Activity],
+  ["xxx", Xxx],
 ];
 
 const ICON_MAP: Record<string, LucideIcon> = Object.fromEntries(CATEGORY_ICONS);

@@ -164,7 +164,12 @@ export function AddDownloadModal({ onClose, onTorrent }: Props) {
                   value: c.id,
                   label: (
                     <span className="accent-option">
-                      <CategoryIcon icon={c.icon} color={c.color} size={16} />
+                      <CategoryIcon
+                        icon={c.icon}
+                        color={c.color}
+                        iconColor={c.icon_color}
+                        size={16}
+                      />
                       {c.name}
                     </span>
                   ),

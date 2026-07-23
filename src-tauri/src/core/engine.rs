@@ -298,14 +298,14 @@ impl Engine {
         }
         // Resolution + the `.torrent` cache are backend-independent, so the built-in
         // engine always does them — aria2 then downloads from the cached metadata.
-        let resolved = self
+        let mut resolved = self
             .inner
             .embedded()
             .resolve_torrent(&source)
             .await
             .ok_or_else(|| "couldn't resolve the torrent".to_string())??;
 
-        // Suggest a category from the torrent name, then the folder it implies.
+        // Suggest a category from the torrent name.
         let name = resolved.name.clone().unwrap_or_default();
         let suggested = {
             let cand = Candidate::from_url_named(
@@ -315,19 +315,45 @@ impl Engine {
             );
             category::categorize(&cand, &self.inner.categories.lock().unwrap())
         };
-        let default_dir = {
+
+        // Fold the suggested category's automation into the preview so the modal
+        // opens with it applied but overridable: exclusions uncheck files, renames
+        // rewrite paths, and the layout is pre-selected. Also resolve the folder.
+        let (default_dir, suggested_layout) = {
             let cats = self.inner.categories.lock().unwrap();
-            suggested
-                .as_ref()
-                .and_then(|id| cats.iter().find(|c| c.id == *id))
+            let cat = suggested.as_ref().and_then(|id| cats.iter().find(|c| c.id == *id));
+            let default_dir = cat
                 .and_then(|c| c.save_dir.clone())
-                .unwrap_or_else(|| dir.to_string_lossy().into_owned())
+                .unwrap_or_else(|| dir.to_string_lossy().into_owned());
+            let layout = match cat {
+                Some(cat) => {
+                    // Exclusions → deselect matching files (empty = keep all).
+                    let keep = category::auto_selection(Some(cat), &resolved.files);
+                    if !keep.is_empty() {
+                        for (i, f) in resolved.files.iter_mut().enumerate() {
+                            f.selected = keep.contains(&i);
+                        }
+                    }
+                    // Renames → rewrite paths (index-aligned; blank keeps original).
+                    // Runs on the original paths, before any are mutated.
+                    let renames = category::plan_renames(cat, &resolved.files);
+                    for (f, r) in resolved.files.iter_mut().zip(renames) {
+                        if !r.is_empty() {
+                            f.path = r;
+                        }
+                    }
+                    cat.automation.layout
+                }
+                None => category::LayoutMode::Original,
+            };
+            (default_dir, layout)
         };
 
         Ok(TorrentPreview {
             resolved,
             suggested_category: suggested,
             default_dir,
+            suggested_layout,
         })
     }
 
@@ -478,22 +504,37 @@ impl Engine {
             None => dir,
         };
 
-        // Load the file list from the cached .torrent, apply the selection, and
-        // apply any per-file renames (index-aligned relative paths; blank keeps
-        // the original). An empty selection means "all files".
-        let files = meta
+        // Resolve the category record up front, both to validate its id and to read
+        // its automation (the exclude rules below). `None` = uncategorized.
+        let cat = {
+            let cats = self.inner.categories.lock().unwrap();
+            category.and_then(|id| cats.iter().find(|c| c.id == id).cloned())
+        };
+
+        // Load the file list from the cached .torrent. Selection: an explicit list
+        // from the caller (the modal) is honored as-is; an empty list is the
+        // headless path (watch folder), where the category's exclude rules decide
+        // which files to keep (`auto_selection` returns empty = keep all).
+        let raw_files = meta
             .info_hash
             .as_deref()
             .map(|h| torrent::meta_path(&self.inner.data_dir, h))
             .and_then(|p| std::fs::read(p).ok())
             .and_then(|b| torrent::files_from_bytes(&b).ok())
             .unwrap_or_default();
-        let files: Vec<_> = files
+        let effective: Vec<usize> = if selected.is_empty() {
+            category::auto_selection(cat.as_ref(), &raw_files)
+        } else {
+            selected
+        };
+        // Apply the selection and any per-file renames (index-aligned relative
+        // paths; blank keeps the original).
+        let files: Vec<_> = raw_files
             .into_iter()
             .enumerate()
             .map(|(i, mut f)| {
-                if !selected.is_empty() {
-                    f.selected = selected.contains(&i);
+                if !effective.is_empty() {
+                    f.selected = effective.contains(&i);
                 }
                 if let Some(path) = renames.get(i) {
                     if !path.trim().is_empty() {
@@ -507,12 +548,8 @@ impl Engine {
         let total = (total > 0).then_some(total);
 
         // The folder is the caller's explicit choice (the modal pre-filled it from
-        // the category's folder but let the user override), so use it as-is — just
-        // validate the category id still exists.
-        let category = {
-            let cats = self.inner.categories.lock().unwrap();
-            category.filter(|id| cats.iter().any(|c| c.id == *id))
-        };
+        // the category's folder but let the user override), so use it as-is.
+        let category = cat.map(|c| c.id);
 
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let dest = dir.to_string_lossy().into_owned();
@@ -1090,6 +1127,152 @@ impl Engine {
         dir.to_string_lossy().into_owned()
     }
 
+    /// Scan every watched folder once: for each new `.torrent` dropped in, resolve
+    /// it, decide under the owning category's rules whether to take it, and (if so)
+    /// add it with that category's automation applied. Called on a timer by the
+    /// watch poller (`core/watch.rs`). `fallback_dir` is the default download folder
+    /// (the OS Downloads dir), used when neither the category nor settings sets one.
+    pub async fn scan_watch_folders(&self, fallback_dir: &Path) {
+        let (watched, default_dir) = {
+            let cats = self.inner.categories.lock().unwrap();
+            let s = self.inner.settings.lock().unwrap();
+            let default_dir = s
+                .download_dir
+                .clone()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| fallback_dir.to_path_buf());
+            let watched: Vec<Category> = cats
+                .iter()
+                .filter(|c| !c.watch_folders.is_empty())
+                .cloned()
+                .collect();
+            (watched, default_dir)
+        };
+        for cat in &watched {
+            for folder in &cat.watch_folders {
+                let entries = match std::fs::read_dir(folder) {
+                    Ok(e) => e,
+                    Err(_) => continue, // folder gone or unreadable; try again next tick
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    // Only unprocessed `.torrent` files — handled ones are renamed to
+                    // `.added`/`.skipped`/`.error`, which no longer end in `.torrent`.
+                    if !is_pending_torrent(&path) || !is_stable(&path) {
+                        continue;
+                    }
+                    self.process_watched(cat, &path, &default_dir).await;
+                }
+            }
+        }
+    }
+
+    /// Handle one dropped `.torrent`: resolve, gate on the category's triggers, add
+    /// (with automation, or uncategorized under `fallback_download`, or skip), then
+    /// mark the file so it isn't picked up again.
+    async fn process_watched(&self, cat: &Category, path: &Path, default_dir: &Path) {
+        let source = path.to_string_lossy().into_owned();
+        let resolved = match self.inner.embedded().resolve_torrent(&source).await {
+            Some(Ok(r)) => r,
+            _ => {
+                tracing::warn!(?path, "watch: couldn't resolve the torrent");
+                mark_processed(path, "error");
+                return;
+            }
+        };
+        let name = resolved.name.clone().unwrap_or_default();
+
+        let outcome = if category::watch_accepts(cat, &name, resolved.total, &resolved.files) {
+            // Take it under this category, with its automation. An empty selection
+            // lets `add_torrent` apply the exclude rules; renames + layout folder are
+            // computed here (add_torrent uses them as given).
+            let dir = cat
+                .save_dir
+                .clone()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| default_dir.to_path_buf());
+            let folder = category::layout_folder(cat, &name, resolved.files.len());
+            let renames = category::plan_renames(cat, &resolved.files);
+            self.add_torrent(source, dir, Some(cat.id.clone()), Vec::new(), folder, renames)
+        } else if cat.fallback_download {
+            // Doesn't match the category's triggers, but the category opts to grab
+            // non-matching drops anyway — uncategorized, no automation.
+            self.add_torrent(
+                source,
+                default_dir.to_path_buf(),
+                None,
+                Vec::new(),
+                None,
+                Vec::new(),
+            )
+        } else {
+            mark_processed(path, "skipped");
+            return;
+        };
+
+        match outcome {
+            Ok(_) => mark_processed(path, "added"),
+            Err(e) => {
+                tracing::warn!(?path, error = %e, "watch: couldn't add the torrent");
+                mark_processed(path, "error");
+            }
+        }
+    }
+
+    /// Turn a finished `.torrent` download into an actual torrent: resolve the
+    /// downloaded file, add it as a torrent under the same category (with that
+    /// category's automation), then archive the HTTP download and delete the spent
+    /// `.torrent`. Fired by `finish` when a completed HTTP `.torrent` landed in a
+    /// category with `capture_torrent_downloads` on. Best-effort — on any failure
+    /// the original download is left in place.
+    async fn convert_download(&self, id: String) {
+        let (source, category, parent) = {
+            let tasks = self.inner.tasks.lock().unwrap();
+            let Some(entry) = tasks.get(&id) else { return };
+            let dest = entry.task.dest.clone();
+            let parent = Path::new(&dest).parent().map(Path::to_path_buf);
+            (dest, entry.task.category.clone(), parent)
+        };
+
+        let resolved = match self.inner.embedded().resolve_torrent(&source).await {
+            Some(Ok(r)) => r,
+            _ => {
+                tracing::warn!(id = %id, "convert: couldn't read the downloaded .torrent");
+                return;
+            }
+        };
+        let name = resolved.name.clone().unwrap_or_default();
+
+        let cat = {
+            let cats = self.inner.categories.lock().unwrap();
+            category
+                .as_ref()
+                .and_then(|cid| cats.iter().find(|c| &c.id == cid).cloned())
+        };
+        // Save into the category's folder if it sets one, else beside the .torrent.
+        let dir = cat
+            .as_ref()
+            .and_then(|c| c.save_dir.clone())
+            .map(PathBuf::from)
+            .or(parent)
+            .unwrap_or_else(|| self.inner.data_dir.clone());
+        let (folder, renames) = match &cat {
+            Some(c) => (
+                category::layout_folder(c, &name, resolved.files.len()),
+                category::plan_renames(c, &resolved.files),
+            ),
+            None => (None, Vec::new()),
+        };
+
+        match self.add_torrent(source, dir, category, Vec::new(), folder, renames) {
+            // The .torrent was only a vehicle: drop the HTTP record + its file.
+            Ok(_) => {
+                let _ = self.archive(&id, true).await;
+            }
+            Err(e) => tracing::warn!(id = %id, error = %e, "convert: couldn't add the torrent"),
+        }
+    }
+
     /// Re-tag a download's category without touching its file (change-only mode).
     fn retag(&self, id: &str, category: Option<String>) {
         let task = {
@@ -1149,6 +1332,35 @@ impl Inner {
             .values()
             .filter(|e| e.control.is_some() && e.task.status != TaskStatus::Seeding)
             .count()
+    }
+
+    /// If `task` is a finished `.torrent` download filed into a category that opts
+    /// to capture torrent downloads, kick off its conversion into a real torrent on
+    /// the runtime. A no-op for anything else, so it's cheap to call on every
+    /// settle. Spawns because the conversion resolves metadata asynchronously.
+    fn maybe_convert_download(inner: &Arc<Inner>, task: &Task) {
+        if task.kind != TaskKind::Http
+            || task.status != TaskStatus::Completed
+            || !is_dot_torrent(&task.dest)
+        {
+            return;
+        }
+        let Some(cat_id) = task.category.clone() else {
+            return;
+        };
+        let enabled = {
+            let cats = inner.categories.lock().unwrap();
+            cats.iter()
+                .any(|c| c.id == cat_id && c.capture_torrent_downloads)
+        };
+        if !enabled {
+            return;
+        }
+        let engine = Engine {
+            inner: inner.clone(),
+        };
+        let id = task.id.clone();
+        tokio::spawn(async move { engine.convert_download(id).await });
     }
 
     /// Start queued tasks until the concurrency limit is reached. A limit of 0
@@ -1255,6 +1467,12 @@ impl Inner {
             last_tick: Instant,
             last_bytes: u64,
             speed: f64,
+            /// The task's stored `uploaded` when this run began, plus the backend's
+            /// upload counter at the first tick — so `uploaded` accumulates across
+            /// restarts as baseline + this-session delta, surviving a backend whose
+            /// own counter reset (e.g. after a crash-recovery recheck).
+            up_baseline: u64,
+            up_start: u64,
         }
         let state = Arc::new(Mutex::new(State {
             started: false,
@@ -1263,6 +1481,8 @@ impl Inner {
             last_tick: Instant::now(),
             last_bytes: 0,
             speed: 0.0,
+            up_baseline: 0,
+            up_start: 0,
         }));
 
         Arc::new(
@@ -1282,8 +1502,18 @@ impl Inner {
                         entry.task.total = Some(t);
                     }
                     // Fold in the live torrent readings (upload, peers, swarm).
+                    // `uploaded` accumulates as baseline + delta rather than taking
+                    // the backend's counter directly, so it survives a session whose
+                    // counter restarted at 0 (a crash-recovery recheck clears
+                    // librqbit's persisted upload total, which would otherwise zero
+                    // the ratio).
                     if let Some(tick) = torrent {
-                        entry.task.uploaded = tick.uploaded;
+                        if !st.started {
+                            st.up_baseline = entry.task.uploaded;
+                            st.up_start = tick.uploaded;
+                        }
+                        entry.task.uploaded =
+                            st.up_baseline + tick.uploaded.saturating_sub(st.up_start);
                         entry.task.up_speed = tick.up_speed;
                         entry.task.peers = tick.peers;
                         entry.task.seeders = tick.seeders;
@@ -1479,6 +1709,9 @@ impl Inner {
                 }
                 let _ = inner.store.lock().unwrap().upsert(&task);
                 inner.emitter.updated(&task);
+                // A completed `.torrent` download in a capture-enabled category is
+                // re-added as a torrent (then this HTTP record is archived).
+                Inner::maybe_convert_download(&inner, &task);
                 Inner::pump(inner);
             }
         }
@@ -1816,6 +2049,46 @@ fn sweep_orphan_parts<'a>(tasks: impl Iterator<Item = &'a Task>) {
             }
         }
     }
+}
+
+/// Whether `dest` names a `.torrent` file (by extension) — the trigger for the
+/// download-to-torrent conversion.
+fn is_dot_torrent(dest: &str) -> bool {
+    Path::new(dest)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("torrent"))
+}
+
+/// Whether `path` is a `.torrent` file the watch poller hasn't handled yet. A
+/// handled file has a marker suffix appended (`.added`/`.skipped`/`.error`), so it
+/// no longer ends in `.torrent` and is skipped.
+fn is_pending_torrent(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("torrent"))
+}
+
+/// Whether a file has been settled on disk long enough to read safely — guards
+/// against reading a `.torrent` mid-copy. A file modified within the last second
+/// is left for the next tick. An unreadable mtime is treated as stable.
+fn is_stable(path: &Path) -> bool {
+    match path.metadata().and_then(|m| m.modified()) {
+        Ok(modified) => modified
+            .elapsed()
+            .map(|age| age >= Duration::from_secs(1))
+            .unwrap_or(true),
+        Err(_) => true,
+    }
+}
+
+/// Mark a watched `.torrent` as handled by appending a `.<suffix>` marker, so the
+/// next scan skips it. Best-effort — a failed rename just means it's retried.
+fn mark_processed(path: &Path, suffix: &str) {
+    let mut target = path.as_os_str().to_owned();
+    target.push(".");
+    target.push(suffix);
+    let _ = std::fs::rename(path, target);
 }
 
 /// Remove a file, treating "already gone" as success but surfacing real errors

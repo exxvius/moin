@@ -12,6 +12,7 @@ import { AddDownloadModal } from "../components/AddDownloadModal";
 import { AddTorrentModal } from "../components/AddTorrentModal";
 import { TorrentDetail } from "../components/TorrentDetail";
 import { Select } from "../components/Select";
+import { MultiSelect } from "../components/MultiSelect";
 import { SmoothScroll } from "../components/SmoothScroll";
 import { ContextMenu, type MenuEntry } from "../components/ContextMenu";
 import { GhostGlowLayer } from "../components/GhostGlowLayer";
@@ -107,6 +108,9 @@ const FILTERS: { id: FilterId; label: string; match: (t: Task) => boolean }[] = 
   },
   { id: "archived", label: "Archived", match: (t) => t.archived },
 ];
+const FILTER_MAP = Object.fromEntries(
+  FILTERS.map((f) => [f.id, f]),
+) as Record<FilterId, (typeof FILTERS)[number]>;
 
 // Friendly names for the backend ids the engine stamps on each task.
 const BACKEND_LABELS: Record<string, string> = {
@@ -129,7 +133,13 @@ type SortKey =
   | "eta"
   | "avgspeed"
   | "added"
-  | "completed";
+  | "completed"
+  | "ratio"
+  | "seeders"
+  | "leechers"
+  | "peers"
+  | "uploaded"
+  | "upspeed";
 type SortDir = "asc" | "desc";
 interface SortLevel {
   key: SortKey;
@@ -264,16 +274,28 @@ function computeStats(tasks: Task[]): Stats {
 }
 
 const SORT_KEY = "moin-dl-sort";
-const SORT_KEYS: SortKey[] = [
-  "name",
-  "size",
-  "progress",
-  "status",
-  "speed",
-  "eta",
-  "avgspeed",
-  "added",
+
+// Every field the Sort-by selector offers — a superset of the visible columns,
+// so a torrent can be ordered by ratio/seeders/etc. that have no column of their
+// own. Clicking a column header sorts by that column and the selector follows.
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: "added", label: "Date added" },
+  { key: "completed", label: "Date completed" },
+  { key: "name", label: "Name" },
+  { key: "size", label: "Size" },
+  { key: "progress", label: "Progress" },
+  { key: "status", label: "Status" },
+  { key: "speed", label: "Download speed" },
+  { key: "eta", label: "ETA" },
+  { key: "avgspeed", label: "Average speed" },
+  { key: "ratio", label: "Ratio" },
+  { key: "seeders", label: "Seeders" },
+  { key: "leechers", label: "Leechers" },
+  { key: "peers", label: "Peers" },
+  { key: "uploaded", label: "Uploaded" },
+  { key: "upspeed", label: "Upload speed" },
 ];
+const SORT_KEYS: SortKey[] = SORT_OPTIONS.map((o) => o.key);
 
 function avgSpeedOf(t: Task): number {
   return t.active_ms > 0 ? t.received / (t.active_ms / 1000) : 0;
@@ -340,9 +362,16 @@ interface DownloadsViewProps {
 
 export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   const store = useStore();
-  const [filter, setFilter] = useState<FilterId>("all");
-  // "" = every category (and uncategorized); "none" = only uncategorized.
-  const [categoryFilter, setCategoryFilter] = useState("");
+  // Multi-select status filter. "all" is a reset: picking it clears the rest;
+  // picking any specific status drops "all". Never empty (falls back to "all").
+  const [statusSel, setStatusSel] = useState<Set<FilterId>>(
+    () => new Set<FilterId>(["all"]),
+  );
+  // Multi-select category filter. "" = "All categories" (reset sentinel); "none"
+  // = uncategorized; otherwise category ids. Same all-is-a-reset behavior.
+  const [categorySel, setCategorySel] = useState<Set<string>>(
+    () => new Set<string>([""]),
+  );
   const [query, setQuery] = useState("");
   const [sortStack, setSortStack] = useState<SortLevel[]>(loadSort);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -366,15 +395,44 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   }, [sortStack]);
 
   const q = query.trim().toLowerCase();
-  const active = FILTERS.find((f) => f.id === filter)!;
+
+  const toggleStatus = (id: string) =>
+    setStatusSel((prev) => {
+      if (id === "all") return new Set<FilterId>(["all"]);
+      const next = new Set(prev);
+      next.delete("all");
+      const fid = id as FilterId;
+      if (next.has(fid)) next.delete(fid);
+      else next.add(fid);
+      return next.size === 0 ? new Set<FilterId>(["all"]) : next;
+    });
+  const toggleCategory = (id: string) =>
+    setCategorySel((prev) => {
+      if (id === "") return new Set<string>([""]);
+      const next = new Set(prev);
+      next.delete("");
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next.size === 0 ? new Set<string>([""]) : next;
+    });
+
+  const hiddenCats = new Set(
+    store.categories.filter((c) => c.hidden_from_all).map((c) => c.id),
+  );
+  const matchesStatus = (t: Task) =>
+    [...statusSel].some((id) => FILTER_MAP[id]?.match(t));
   const matchesCategory = (t: Task) => {
-    if (categoryFilter === "") return true;
-    if (categoryFilter === "none") return t.category == null;
-    return t.category === categoryFilter;
+    // "All categories" shows everything but a hidden-from-all category's downloads
+    // (uncategorized always shows). A specific pick is the union of those chosen.
+    if (categorySel.has("")) {
+      return t.category == null || !hiddenCats.has(t.category);
+    }
+    if (t.category == null) return categorySel.has("none");
+    return categorySel.has(t.category);
   };
   const rows = store.all.filter(
     (t) =>
-      active.match(t) &&
+      matchesStatus(t) &&
       matchesCategory(t) &&
       (q === "" || t.filename.toLowerCase().includes(q)),
   );
@@ -436,7 +494,9 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
     (t) => t.status === "downloading",
   ).length;
 
-  const isArchived = filter === "archived";
+  // Show the archive-only columns only when Archived is the single active filter;
+  // mixed with others, the normal live columns stay.
+  const isArchived = statusSel.size === 1 && statusSel.has("archived");
   const allColumns = isArchived ? ARCHIVED_COLUMNS : COLUMNS;
   const columns =
     listWidth > 0 ? fitColumns(allColumns, listWidth) : allColumns;
@@ -452,6 +512,18 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
       return [{ key: col, dir: col === "name" ? "asc" : "desc" }, ...without];
     });
   };
+  // Clear all sorting (back to the natural order), and flip the primary key's
+  // direction — both for the Sort-by control, whose field can have no column.
+  const clearSort = () => setSortStack([]);
+  const toggleSortDir = () =>
+    setSortStack((prev) =>
+      prev.length === 0
+        ? prev
+        : [
+            { key: prev[0].key, dir: prev[0].dir === "asc" ? "desc" : "asc" },
+            ...prev.slice(1),
+          ],
+    );
 
   // FLIP: when the sorted order changes, animate each card sliding from its old
   // position to its new one (e.g. one download passing another by progress).
@@ -516,10 +588,12 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   const toneOf = (id: string): string | null => {
     const t = taskById.get(id);
     if (!t) return null;
-    // The card's glow follows its category color when it has one, matching the
-    // background tint; uncategorized rows glow in the theme accent.
+    // The escaping border glow follows the category's effects color (falling back
+    // to its main color); uncategorized rows glow in the theme accent. The
+    // background tint uses the main color separately (see the card style).
     const cat = findCategory(store.categories, t.category);
-    if (cat?.color) return categorySwatch(cat.color);
+    const glow = cat?.effects_color || cat?.color;
+    if (glow) return categorySwatch(glow);
     return "var(--accent)";
   };
 
@@ -584,7 +658,12 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
     const items: MenuEntry[] = store.categories.map((c) => ({
       label: (
         <span className="accent-option">
-          <CategoryIcon icon={c.icon} color={c.color} size={15} />
+          <CategoryIcon
+            icon={c.icon}
+            color={c.color}
+            iconColor={c.icon_color}
+            size={15}
+          />
           <span style={c.color ? { color: categorySwatch(c.color) } : undefined}>
             {c.name}
           </span>
@@ -883,11 +962,28 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
 
       <div className="card dl-panel">
         <div className="dl-toolbar">
-          <div className="filter-row">
-            <Select
-              value={filter}
-              ariaLabel="Filter downloads"
-              onChange={(v) => setFilter(v as FilterId)}
+          <div className="dl-f-status">
+            <MultiSelect
+              ariaLabel="Filter by status"
+              caret
+              selected={statusSel}
+              onToggle={toggleStatus}
+              trigger={
+                statusSel.has("all") ? (
+                  <span className="opt">
+                    All<span className="opt-count">{counts.all}</span>
+                  </span>
+                ) : statusSel.size === 1 ? (
+                  <span className="opt">
+                    {FILTER_MAP[[...statusSel][0]].label}
+                    <span className="opt-count">
+                      {counts[[...statusSel][0]]}
+                    </span>
+                  </span>
+                ) : (
+                  <span className="opt">{statusSel.size} filters</span>
+                )
+              }
               options={FILTERS.map((f) => ({
                 value: f.id,
                 label: (
@@ -898,52 +994,118 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
                 ),
               }))}
             />
-            {store.categories.length > 0 && (
-              <Select
-                value={categoryFilter}
+          </div>
+          {store.categories.length > 0 && (
+            <div className="dl-f-category">
+              <MultiSelect
                 ariaLabel="Filter by category"
                 caret
-                onChange={setCategoryFilter}
+                selected={categorySel}
+                onToggle={toggleCategory}
+                trigger={
+                  categorySel.has("")
+                    ? "All categories"
+                    : categorySel.size === 1
+                      ? [...categorySel][0] === "none"
+                        ? "Uncategorized"
+                        : store.categories.find(
+                            (c) => c.id === [...categorySel][0],
+                          )?.name ?? "1 category"
+                      : `${categorySel.size} categories`
+                }
                 options={[
                   { value: "", label: "All categories" },
                   { value: "none", label: "Uncategorized" },
-                  ...store.categories.map((c) => ({
-                    value: c.id,
-                    label: (
-                      <span className="accent-option">
-                        <CategoryIcon icon={c.icon} color={c.color} size={16} />
-                        <span
-                          style={
-                            c.color
-                              ? { color: categorySwatch(c.color) }
-                              : undefined
-                          }
-                        >
-                          {c.name}
+                  // Hidden-from-All categories sink to the bottom of the filter
+                  // list, regardless of their normal order (stable otherwise).
+                  ...[...store.categories]
+                    .sort(
+                      (a, b) =>
+                        Number(a.hidden_from_all) - Number(b.hidden_from_all),
+                    )
+                    .map((c) => {
+                      const tone = c.icon_color || c.color;
+                    return {
+                      value: c.id,
+                      label: (
+                        <span className="accent-option">
+                          <CategoryIcon
+                            icon={c.icon}
+                            color={c.color}
+                            iconColor={c.icon_color}
+                            size={16}
+                          />
+                          <span
+                            style={
+                              tone
+                                ? { color: categorySwatch(tone) }
+                                : undefined
+                            }
+                          >
+                            {c.name}
+                          </span>
                         </span>
-                      </span>
-                    ),
-                  })),
+                      ),
+                    };
+                  }),
                 ]}
               />
-            )}
+            </div>
+          )}
+          <div className="dl-sort">
+              <Select
+                value={primary?.key ?? ""}
+                ariaLabel="Sort by"
+                caret
+                onChange={(v) =>
+                  v === "" ? clearSort() : sortBy(v as SortKey)
+                }
+                options={[
+                  {
+                    value: "",
+                    label: <span className="sort-ph">Sort by…</span>,
+                  },
+                  ...SORT_OPTIONS.map((o) => ({ value: o.key, label: o.label })),
+                ]}
+              />
+              <button
+                className="sort-dir"
+                onClick={toggleSortDir}
+                disabled={!primary}
+                aria-label="Toggle sort direction"
+                title={
+                  primary
+                    ? primary.dir === "asc"
+                      ? "Ascending"
+                      : "Descending"
+                    : "Sort direction"
+                }
+              >
+                <span
+                  className={`sort-ind${primary?.dir === "asc" ? " asc" : ""}`}
+                >
+                  <SortArrowIcon size={14} />
+                </span>
+              </button>
           </div>
-          <input
-            className="dl-search selectable"
-            type="text"
-            placeholder="Filter by name…"
-            value={query}
-            spellCheck={false}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <button
-            className="toolbar-add"
-            onClick={() => setShowAdd(true)}
-            aria-label="Add a download"
-            title="Add a download"
-          >
-            <AddIcon size={18} />
-          </button>
+          <div className="dl-search-group">
+            <input
+              className="dl-search selectable"
+              type="text"
+              placeholder="Filter by name…"
+              value={query}
+              spellCheck={false}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            <button
+              className="toolbar-add"
+              onClick={() => setShowAdd(true)}
+              aria-label="Add a download"
+              title="Add a download"
+            >
+              <AddIcon size={18} />
+            </button>
+          </div>
         </div>
 
         {rows.length === 0 ? (
@@ -1117,6 +1279,18 @@ function sortRows(
         return t.created_at;
       case "completed":
         return t.completed_at ?? 0;
+      case "ratio":
+        return t.received > 0 ? (t.uploaded ?? 0) / t.received : 0;
+      case "seeders":
+        return t.seeders ?? 0;
+      case "leechers":
+        return t.leechers ?? 0;
+      case "peers":
+        return t.peers ?? 0;
+      case "uploaded":
+        return t.uploaded ?? 0;
+      case "upspeed":
+        return t.up_speed ?? 0;
     }
   };
   return [...rows].sort((a, b) => {
@@ -1128,6 +1302,22 @@ function sortRows(
     }
     return 0;
   });
+}
+
+/** Card CSS vars. `--cat` tints the background from the category's main color;
+ *  `--cat-glow` colors the border and the hover/select glow from its icon color
+ *  (falling back to the main color). Each is set only when it has a color, so an
+ *  uncategorized or colorless card keeps a neutral border and no tint. */
+function cardTintStyle(cat?: Category): CSSProperties | undefined {
+  if (!cat) return undefined;
+  const tint = cat.color ? categorySwatch(cat.color) : null;
+  const glowSrc = cat.effects_color || cat.color;
+  const glow = glowSrc ? categorySwatch(glowSrc) : null;
+  if (!tint && !glow) return undefined;
+  const style: Record<string, string> = {};
+  if (tint) style["--cat"] = tint;
+  if (glow) style["--cat-glow"] = glow;
+  return style as CSSProperties;
 }
 
 interface CardProps {
@@ -1202,7 +1392,12 @@ function Card({
           <span className="dl-c-name" title={task.filename}>
             {cat && (
               <span className="dl-name-icon">
-                <CategoryIcon icon={cat.icon} color={cat.color} size={15} />
+                <CategoryIcon
+                  icon={cat.icon}
+                  color={cat.color}
+                  iconColor={cat.icon_color}
+                  size={15}
+                />
               </span>
             )}
             <span className="dl-name-col">
@@ -1332,11 +1527,7 @@ function Card({
       }${archived ? " archived" : ""}`}
       data-id={task.id}
       data-status={task.status}
-      style={
-        cat?.color
-          ? ({ "--cat": categorySwatch(cat.color) } as CSSProperties)
-          : undefined
-      }
+      style={cardTintStyle(cat)}
       onContextMenu={(e) => onContext(e, task)}
     >
       <div
@@ -1390,7 +1581,12 @@ function Card({
                 <div className="detail-item right">
                   <span className="dk">Category</span>
                   <span className="dv cat-tag">
-                    <CategoryIcon icon={cat.icon} color={cat.color} size={14} />
+                    <CategoryIcon
+                      icon={cat.icon}
+                      color={cat.color}
+                      iconColor={cat.icon_color}
+                      size={14}
+                    />
                     {cat.name}
                   </span>
                 </div>

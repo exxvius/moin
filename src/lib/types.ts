@@ -97,6 +97,8 @@ export interface TorrentPreview {
   suggested_category: string | null;
   /** Folder the download would default to (modal shows + lets you override). */
   default_dir: string;
+  /** Content layout the suggested category prefers (modal pre-selects it). */
+  suggested_layout: LayoutMode;
 }
 
 export interface TaskProgress {
@@ -157,6 +159,8 @@ export interface Settings {
   torrent_download_limit: number;
   /** Torrent upload cap in bytes/sec, 0 = unlimited. Applies live. */
   torrent_upload_limit: number;
+  /** How often (seconds) watched folders are scanned for dropped torrents. */
+  watch_interval_secs: number;
 }
 
 export interface BackendInfo {
@@ -226,22 +230,73 @@ export type Trigger =
 
 export type TriggerType = Trigger["type"];
 
+/** How a torrent's files land on disk relative to the save folder. Mirrors the
+ *  add-torrent modal's layout choice. */
+export type LayoutMode = "original" | "subfolder" | "flat";
+
+/** One auto-exclude condition on a torrent file. A file matching any rule is
+ *  deselected. Tag mirrors the Rust `FileMatch` enum (kebab-case). */
+export type FileMatch =
+  | { type: "extension"; exts: string[] }
+  | { type: "name-pattern"; patterns: string[] }
+  | { type: "size-under"; bytes: number }
+  | { type: "size-over"; bytes: number };
+
+export type FileMatchType = FileMatch["type"];
+
+/** A canned rename transform (applied to a file name's stem). */
+export type PresetKind =
+  | "dots-to-spaces"
+  | "underscores-to-spaces"
+  | "lowercase"
+  | "strip-tags";
+
+/** One rename step, applied in order to each file's name. */
+export type RenameRule =
+  | { type: "replace"; find: string; with: string; regex: boolean }
+  | { type: "preset"; kind: PresetKind };
+
+export type RenameRuleType = RenameRule["type"];
+
+/** Per-category torrent automation: how a torrent this category claims is
+ *  organized, whatever source it came from. All fields default empty/neutral. */
+export interface Automation {
+  /** Files matching any rule are deselected (never downloaded). */
+  exclude: FileMatch[];
+  /** Content layout applied to torrents filed here. */
+  layout: LayoutMode;
+  /** Rename steps applied in order to each file's name. */
+  renames: RenameRule[];
+}
+
 /** A named bucket plus the rules that file downloads into it. */
 export interface Category {
   id: string;
   name: string;
   /** Accent id for the chip/dot color. */
   color: string;
+  /** Optional separate icon color (accent id or "black"); empty inherits `color`. */
+  icon_color: string;
+  /** Optional separate color for card effects (border/glow); empty inherits `color`. */
+  effects_color: string;
   /** Optional icon id from the curated set; null shows the color dot. */
   icon: string | null;
+  /** Hide this category's downloads from the "All categories" filter. */
+  hidden_from_all: boolean;
   /** Optional save-folder override; null = default download dir. */
   save_dir: string | null;
   /** Which add-methods this category accepts; empty = any source. */
   sources: AddMethodKind[];
+  /** Folders watched for dropped .torrent files (auto-added under this category). */
+  watch_folders: string[];
+  /** Re-add a .torrent downloaded through moin as a torrent when it files here. */
+  capture_torrent_downloads: boolean;
   /** Content conditions; all must pass for a download to match. */
   triggers: Trigger[];
-  /** Automated sources only (later): download non-matching items uncategorized. */
+  /** Automated sources: download non-matching watch-folder drops uncategorized. */
   fallback_download: boolean;
   /** Priority; lower wins when several match. */
   order: number;
+  /** Torrent automation (exclusions, layout, renames). */
+  automation: Automation;
 }

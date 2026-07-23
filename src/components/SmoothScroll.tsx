@@ -18,96 +18,75 @@ interface Props {
 }
 
 /**
- * An eased (momentum) scroller with a custom scrollbar in its own column.
+ * A natively-scrolling list with a custom themed scrollbar in its own column and
+ * a pinned header floated over the top.
  *
- * Unlike a normal scroll container, this one moves its content with a transform
- * inside an `overflow: visible` viewport, and clips vertically with a CSS mask
- * that leaves the sides open. That lets each row's side glow spill past the
- * viewport edges (a real scroll container would clip it on both axes).
+ * The viewport scrolls natively — no momentum/eased transform, which felt laggy.
+ * The native scrollbar is hidden; a custom thumb in `.ss-bar` mirrors the scroll
+ * position and can be dragged. The viewport clips its rows on every side, so a
+ * highlighted row's escaping glow is drawn by a separate layer passed as `behind`
+ * (which sits outside the clip).
  *
- * Because transform-scrolling has no scroll container, `position: sticky` can't
- * pin a header — so the header is rendered separately and floated on top, and
- * the content is padded down by the header's height.
+ * Because the header is floated rather than `position: sticky`, the content is
+ * padded down by the header's height so the first row rests just below it.
  *
- * The forwarded ref points at the viewport (for measuring/hit-testing rows).
+ * The forwarded ref points at the scrolling viewport (for measuring/hit-testing
+ * rows and reading its scroll offset).
  */
 export const SmoothScroll = forwardRef<HTMLDivElement, Props>(
   function SmoothScroll({ children, className, header, behind, onScroll }, ref) {
-    const frameRef = useRef<HTMLDivElement>(null); // masked viewport
-    const contentRef = useRef<HTMLDivElement>(null); // transformed list
+    const viewRef = useRef<HTMLDivElement>(null); // native scroll viewport
+    const contentRef = useRef<HTMLDivElement>(null);
     const headerRef = useRef<HTMLDivElement>(null);
     const thumbRef = useRef<HTMLDivElement>(null);
     const onScrollRef = useRef(onScroll);
     onScrollRef.current = onScroll;
-    useImperativeHandle(ref, () => frameRef.current as HTMLDivElement, []);
+    useImperativeHandle(ref, () => viewRef.current as HTMLDivElement, []);
 
     useEffect(() => {
-      const frame = frameRef.current;
+      const view = viewRef.current;
       const content = contentRef.current;
       const thumb = thumbRef.current;
-      if (!frame || !content || !thumb) return;
+      if (!view || !content || !thumb) return;
 
-      let target = 0;
-      let current = 0;
-      let raf = 0;
-
-      const metrics = () => {
-        const view = frame.clientHeight;
-        const total = content.scrollHeight; // includes the header padding
-        return { view, total, max: Math.max(0, total - view) };
-      };
-
+      // Size + place the custom thumb from the viewport's real scroll offset.
       const paintThumb = () => {
-        const { view, total, max } = metrics();
-        if (total <= view + 1) {
+        const viewH = view.clientHeight;
+        const total = view.scrollHeight;
+        if (total <= viewH + 1) {
           thumb.style.opacity = "0";
           thumb.style.pointerEvents = "none";
           return;
         }
         thumb.style.opacity = "1";
         thumb.style.pointerEvents = "auto";
-        const thumbH = Math.max(32, (view / total) * view);
-        const maxTop = view - thumbH;
-        const top = max > 0 ? (current / max) * maxTop : 0;
+        const thumbH = Math.max(32, (viewH / total) * viewH);
+        const maxTop = viewH - thumbH;
+        const max = total - viewH;
+        const top = max > 0 ? (view.scrollTop / max) * maxTop : 0;
         thumb.style.height = `${thumbH}px`;
         thumb.style.transform = `translateY(${top}px)`;
       };
 
-      const apply = () => {
-        content.style.transform = `translateY(${-current}px)`;
+      const onScrollEv = () => {
         paintThumb();
         onScrollRef.current?.();
       };
 
-      const tick = () => {
-        current += (target - current) * 0.16;
-        if (Math.abs(target - current) < 0.4) current = target;
-        apply();
-        raf = current === target ? 0 : requestAnimationFrame(tick);
-      };
-
-      const onWheel = (e: WheelEvent) => {
-        const { max } = metrics();
-        if (max <= 0) return;
-        e.preventDefault();
-        target = Math.max(0, Math.min(max, target + e.deltaY));
-        if (!raf) raf = requestAnimationFrame(tick);
-      };
-
+      // Drag the custom thumb to scroll the native viewport.
       const onThumbDown = (e: MouseEvent) => {
         e.preventDefault();
         document.body.style.userSelect = "none";
         const startY = e.clientY;
-        const startScroll = current;
-        const { view, total, max } = metrics();
-        const thumbH = Math.max(32, (view / total) * view);
-        const maxTop = view - thumbH;
+        const startScroll = view.scrollTop;
+        const viewH = view.clientHeight;
+        const total = view.scrollHeight;
+        const max = total - viewH;
+        const thumbH = Math.max(32, (viewH / total) * viewH);
+        const maxTop = viewH - thumbH;
         const onMove = (ev: MouseEvent) => {
           const ratio = maxTop > 0 ? (ev.clientY - startY) / maxTop : 0;
-          const next = Math.max(0, Math.min(max, startScroll + ratio * max));
-          target = next;
-          current = next;
-          apply();
+          view.scrollTop = Math.max(0, Math.min(max, startScroll + ratio * max));
         };
         const onUp = () => {
           document.body.style.userSelect = "";
@@ -119,40 +98,35 @@ export const SmoothScroll = forwardRef<HTMLDivElement, Props>(
       };
 
       // Push the list down so the first row rests just below the pinned header
-      // (plus a small gap so it doesn't butt against it), then re-clamp in case
-      // the content shrank under the current offset.
+      // (plus a small gap), then repaint the thumb for the new content size.
       const HEADER_GAP = 12;
       const recompute = () => {
         const headerH = headerRef.current?.offsetHeight ?? 0;
         content.style.paddingTop = headerH ? `${headerH + HEADER_GAP}px` : "0px";
-        const { max } = metrics();
-        current = Math.min(current, max);
-        target = Math.min(target, max);
-        apply();
+        paintThumb();
       };
 
-      frame.addEventListener("wheel", onWheel, { passive: false });
+      view.addEventListener("scroll", onScrollEv, { passive: true });
       thumb.addEventListener("mousedown", onThumbDown);
       // Content resizes on add/remove and while a card expands; the frame on
       // window resize. Either changes how far we can scroll.
       const ro = new ResizeObserver(recompute);
-      ro.observe(frame);
+      ro.observe(view);
       ro.observe(content);
       if (headerRef.current) ro.observe(headerRef.current);
       recompute();
 
       return () => {
-        frame.removeEventListener("wheel", onWheel);
+        view.removeEventListener("scroll", onScrollEv);
         thumb.removeEventListener("mousedown", onThumbDown);
         ro.disconnect();
-        if (raf) cancelAnimationFrame(raf);
       };
     }, []);
 
     return (
       <div className={`ss${className ? ` ${className}` : ""}`}>
         {behind}
-        <div className="ss-view" ref={frameRef}>
+        <div className="ss-view" ref={viewRef}>
           <div className="ss-content" ref={contentRef}>
             {children}
           </div>

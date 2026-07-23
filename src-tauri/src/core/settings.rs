@@ -29,6 +29,10 @@ const DEFAULT_SEED_TIME_LIMIT_MINS: u64 = 0;
 const DEFAULT_TORRENT_LISTEN_PORT: u16 = 4240;
 /// Torrent up/download rate caps in bytes per second. 0 = unlimited.
 const DEFAULT_TORRENT_RATE_LIMIT: u64 = 0;
+/// How often the watch-folder poller scans a category's watched folders for
+/// dropped `.torrent` files, in seconds. Floored to a couple of seconds so a bad
+/// value can't hammer the disk. Scanning is a no-op until a category adds a folder.
+const DEFAULT_WATCH_INTERVAL: u64 = 5;
 
 /// What happens to a download's file when it's moved to a different category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -122,6 +126,10 @@ pub struct Settings {
     /// (see `Engine::new`) and read live, so regenerating it takes effect at once.
     #[serde(default)]
     pub rpc_token: String,
+    /// How often (seconds) the watch-folder poller scans categories' watched
+    /// folders for dropped `.torrent` files. Read live; floored to 2s.
+    #[serde(default = "default_watch_interval")]
+    pub watch_interval_secs: u64,
 }
 
 fn default_connections() -> usize {
@@ -168,6 +176,10 @@ fn default_torrent_rate_limit() -> u64 {
     DEFAULT_TORRENT_RATE_LIMIT
 }
 
+fn default_watch_interval() -> u64 {
+    DEFAULT_WATCH_INTERVAL
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -192,6 +204,7 @@ impl Default for Settings {
             torrent_upnp: true,
             torrent_download_limit: DEFAULT_TORRENT_RATE_LIMIT,
             torrent_upload_limit: DEFAULT_TORRENT_RATE_LIMIT,
+            watch_interval_secs: DEFAULT_WATCH_INTERVAL,
         }
     }
 }

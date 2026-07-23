@@ -5,9 +5,23 @@ import { ACCENTS } from "./accent";
 import { formatBytes } from "./format";
 import type { AddMethodKind, Category, Trigger } from "./types";
 
-/** Swatch color for a category's accent id, or a neutral fallback. */
+/** Colors a category can wear: the app accents plus a category-only "Black".
+ *  Black isn't an app theme accent (it has no `[data-accent]` rule) — it's just a
+ *  swatch, which is all a category color needs, since cards tint straight from the
+ *  raw value via `--cat`. */
+export const CATEGORY_COLORS: { id: string; label: string; swatch: string }[] = [
+  ...ACCENTS,
+  // Black/White are theme-reversed neutrals (see --cat-black/--cat-white in
+  // tokens.css) so each stays visible against the current background.
+  { id: "black", label: "Black", swatch: "var(--cat-black)" },
+  { id: "white", label: "White", swatch: "var(--cat-white)" },
+];
+
+/** Swatch color for a category's color id, or a neutral fallback. `"accent"` is a
+ *  special id that follows the app's current theme accent. */
 export function categorySwatch(color: string): string {
-  return ACCENTS.find((a) => a.id === color)?.swatch ?? "var(--text-dim)";
+  if (color === "accent") return "var(--accent)";
+  return CATEGORY_COLORS.find((a) => a.id === color)?.swatch ?? "var(--text-dim)";
 }
 
 /** The category with this id from a list, or undefined when null/missing. */

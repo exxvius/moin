@@ -2,7 +2,6 @@ import {
   useEffect,
   useState,
   type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
@@ -10,12 +9,19 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { Select } from "../components/Select";
 import { Switch } from "../components/Switch";
 import { ConfirmModal } from "../components/ConfirmModal";
+import { TokenInput } from "../components/TokenInput";
+import { AutomationEditor } from "../components/AutomationEditor";
+import { GridPicker, type GridItem } from "../components/GridPicker";
 import { DragHandleIcon } from "../components/icons";
 import { useSortableList } from "../lib/useSortableList";
 import { api } from "../lib/api";
 import { useStore } from "../lib/store";
-import { ACCENTS } from "../lib/accent";
-import { ADD_METHOD_LABEL, categorySwatch, ruleSummary } from "../lib/categories";
+import {
+  ADD_METHOD_LABEL,
+  CATEGORY_COLORS,
+  categorySwatch,
+  ruleSummary,
+} from "../lib/categories";
 import { CATEGORY_ICONS } from "../lib/categoryIcons";
 import { CategoryIcon } from "../components/CategoryIcon";
 import type {
@@ -40,17 +46,53 @@ const TRIGGER_TYPES: { value: TriggerType; label: string }[] = [
 // Add-methods that exist today; watch methods arrive with automation.
 const LIVE_SOURCES: AddMethodKind[] = ["manual-link", "manual-torrent", "browser-capture"];
 
+// The color swatches, shared by the color / icon-color / effects-color grids.
+const COLOR_SWATCHES: GridItem[] = CATEGORY_COLORS.map((a) => ({
+  value: a.id,
+  title: a.label,
+  render: <span className="grid-swatch" style={{ background: a.swatch }} />,
+}));
+
+// "Match accent color" — follows the app's theme accent. Offered by every color
+// picker (category color, icon color, effects color).
+const ACCENT_ITEM: GridItem = {
+  value: "accent",
+  title: "Match accent color",
+  render: <span className="grid-swatch" style={{ background: "var(--accent)" }} />,
+};
+
+// The icon grid: a leading "no icon" cell, then every curated icon.
+const ICON_ITEMS: GridItem[] = [
+  // Blank cell = no icon (an empty square, not a glyph of its own).
+  { value: "", title: "No icon", render: null },
+  ...CATEGORY_ICONS.map(([id, Icon]) => ({
+    value: id,
+    title: id.replace(/-/g, " "),
+    render: <Icon size={18} />,
+  })),
+];
+
 function blankCategory(): Category {
   return {
     id: "",
     name: "",
     color: "blue",
+    icon_color: "",
+    effects_color: "",
     icon: null,
+    hidden_from_all: false,
     save_dir: null,
     sources: [],
+    watch_folders: [],
+    capture_torrent_downloads: false,
     triggers: [],
     fallback_download: false,
     order: 0,
+    automation: {
+      exclude: [],
+      layout: "original",
+      renames: [],
+    },
   };
 }
 
@@ -181,7 +223,12 @@ export function CategoriesView() {
                     <DragHandleIcon size={18} />
                   </span>
                   <span className="cat-card-icon">
-                    <CategoryIcon icon={c.icon} color={c.color} size={20} />
+                    <CategoryIcon
+                      icon={c.icon}
+                      color={c.color}
+                      iconColor={c.icon_color}
+                      size={20}
+                    />
                   </span>
                   <div className="cat-row-main">
                     <div className="setting-label">{c.name || "Untitled"}</div>
@@ -292,6 +339,10 @@ function CategoryEditor({ initial, onSave, onCancel }: EditorProps) {
     initial.triggers.map(() => crypto.randomUUID()),
   );
 
+  // Whether the watched-folder source is on (reveals the folder pickers). Seeded
+  // from whether the category already watches anything.
+  const [watchOn, setWatchOn] = useState(initial.watch_folders.length > 0);
+
   const setTrigger = (idx: number, t: Trigger) =>
     patch({ triggers: draft.triggers.map((cur, i) => (i === idx ? t : cur)) });
   const removeTrigger = (idx: number) => {
@@ -318,6 +369,50 @@ function CategoryEditor({ initial, onSave, onCancel }: EditorProps) {
       title: "Choose a save folder",
     });
     if (typeof picked === "string") patch({ save_dir: picked });
+  };
+
+  // Watched-folder source: toggling it off clears the folders so the source is
+  // genuinely off; a folder is added via the OS picker.
+  const toggleWatch = () => {
+    if (watchOn) {
+      setWatchOn(false);
+      patch({ watch_folders: [] });
+    } else {
+      setWatchOn(true);
+    }
+  };
+  const addWatchFolder = async () => {
+    const picked = await open({
+      directory: true,
+      multiple: false,
+      title: "Choose a folder to watch for .torrent files",
+    });
+    if (typeof picked === "string" && !draft.watch_folders.includes(picked)) {
+      patch({ watch_folders: [...draft.watch_folders, picked] });
+    }
+  };
+  const removeWatchFolder = (i: number) =>
+    patch({ watch_folders: draft.watch_folders.filter((_, j) => j !== i) });
+
+  // The swatch shown in a color picker's trigger: the chosen color, else a
+  // fallback (a category color the picker inherits from), else the no-color ring.
+  const swatchNode = (colorId: string, fallback?: string) => {
+    const id = colorId || fallback || "";
+    return id ? (
+      <span className="grid-swatch" style={{ background: categorySwatch(id) }} />
+    ) : (
+      <span className="grid-swatch no-color" />
+    );
+  };
+  const inheritItem: GridItem = {
+    value: "",
+    title: "Match category color",
+    render: (
+      <span
+        className="grid-swatch inherit"
+        style={{ background: categorySwatch(draft.color) }}
+      />
+    ),
   };
 
   const canSave = draft.name.trim().length > 0;
@@ -349,65 +444,67 @@ function CategoryEditor({ initial, onSave, onCancel }: EditorProps) {
 
           <div className="setting-row">
             <div className="setting-label">Color</div>
-            <Select
+            <GridPicker
               value={draft.color}
               ariaLabel="Category color"
-              caret
               onChange={(v) => patch({ color: v })}
-              options={[
+              trigger={swatchNode(draft.color)}
+              items={[
                 {
                   value: "",
-                  label: (
-                    <span className="accent-option">
-                      <span className="accent-dot no-color" />
-                      No color
-                    </span>
-                  ),
+                  title: "No color",
+                  render: <span className="grid-swatch no-color" />,
                 },
-                ...ACCENTS.map((a) => ({
-                  value: a.id,
-                  label: (
-                    <span className="accent-option">
-                      <span
-                        className="accent-dot"
-                        style={{ background: a.swatch }}
-                      />
-                      {a.label}
-                    </span>
-                  ),
-                })),
+                ACCENT_ITEM,
+                ...COLOR_SWATCHES,
               ]}
             />
           </div>
 
-          <div className="cat-section">
-            <div className="icon-head">
+          <div className="setting-row">
+            <div className="setting-label">Icon color</div>
+            <GridPicker
+              value={draft.icon_color}
+              ariaLabel="Icon color"
+              onChange={(v) => patch({ icon_color: v })}
+              trigger={swatchNode(draft.icon_color, draft.color)}
+              items={[inheritItem, ACCENT_ITEM, ...COLOR_SWATCHES]}
+            />
+          </div>
+
+          <div className="setting-row">
+            <div className="setting-label">Effects color</div>
+            <GridPicker
+              value={draft.effects_color}
+              ariaLabel="Effects color"
+              onChange={(v) => patch({ effects_color: v })}
+              trigger={swatchNode(draft.effects_color, draft.color)}
+              items={[inheritItem, ACCENT_ITEM, ...COLOR_SWATCHES]}
+            />
+          </div>
+
+          <div className="setting-row">
+            <div>
               <div className="setting-label">Icon</div>
-              <button
-                className="dl-btn"
-                disabled={!draft.icon}
-                onClick={() => patch({ icon: null })}
-              >
-                No icon
-              </button>
+              <div className="dim">
+                Optional — shows on the category in place of the color dot.
+              </div>
             </div>
-            <div className="dim">
-              Optional — shows on the category in place of the color dot.
-            </div>
-            <div className="icon-grid" style={{ color: categorySwatch(draft.color) }}>
-              {CATEGORY_ICONS.map(([id, Icon]) => (
-                <button
-                  key={id}
-                  className={`icon-swatch${draft.icon === id ? " on" : ""}`}
-                  title={id.replace(/-/g, " ")}
-                  aria-label={id}
-                  aria-pressed={draft.icon === id}
-                  onClick={() => patch({ icon: id })}
-                >
-                  <Icon size={18} />
-                </button>
-              ))}
-            </div>
+            <GridPicker
+              value={draft.icon ?? ""}
+              ariaLabel="Category icon"
+              onChange={(v) => patch({ icon: v || null })}
+              menuColor={categorySwatch(draft.icon_color || draft.color)}
+              trigger={
+                <CategoryIcon
+                  icon={draft.icon}
+                  color={draft.color}
+                  iconColor={draft.icon_color}
+                  size={18}
+                />
+              }
+              items={ICON_ITEMS}
+            />
           </div>
 
           <div className="setting-row">
@@ -435,11 +532,28 @@ function CategoryEditor({ initial, onSave, onCancel }: EditorProps) {
             </div>
           </div>
 
+          <div className="setting-row">
+            <div>
+              <div className="setting-label">Hide from All filter</div>
+              <div className="dim">
+                Keep this category's downloads out of the “All categories” filter —
+                they show only when you pick this category. Like archived tasks
+                staying out of the “All” status filter.
+              </div>
+            </div>
+            <Switch
+              checked={draft.hidden_from_all}
+              ariaLabel="Hide from the All categories filter"
+              onChange={(v) => patch({ hidden_from_all: v })}
+            />
+          </div>
+
           <div className="cat-section">
             <div className="setting-label">Sources</div>
             <div className="dim">
-              How the download arrived. Pick which to accept, or leave all off to
-              match any source.
+              How this category takes in downloads. The first three filter which
+              manual and captured adds it claims (leave all off to match any); the
+              last two feed it automatically.
             </div>
             <div className="method-chips cat-sources">
               {LIVE_SOURCES.map((m) => {
@@ -461,7 +575,65 @@ function CategoryEditor({ initial, onSave, onCancel }: EditorProps) {
                   </button>
                 );
               })}
+              <button
+                className={`method-chip${watchOn ? " on" : ""}`}
+                aria-pressed={watchOn}
+                onClick={toggleWatch}
+              >
+                {ADD_METHOD_LABEL["watch-folder"]}
+              </button>
+              <button
+                className={`method-chip${draft.capture_torrent_downloads ? " on" : ""}`}
+                aria-pressed={draft.capture_torrent_downloads}
+                onClick={() =>
+                  patch({
+                    capture_torrent_downloads: !draft.capture_torrent_downloads,
+                  })
+                }
+              >
+                Downloaded torrent
+              </button>
             </div>
+
+            {watchOn && (
+              <div className="watch-config">
+                <div className="dim">
+                  Drop a .torrent into one of these folders and it's added under
+                  this category automatically. Handled files are renamed so they
+                  aren't added twice.
+                </div>
+                <div className="watch-folders">
+                  {draft.watch_folders.map((folder, i) => (
+                    <div className="watch-folder-row" key={folder}>
+                      <span
+                        className="path selectable watch-folder-path"
+                        title={folder}
+                      >
+                        {folder}
+                      </span>
+                      <button
+                        className="dl-btn danger"
+                        aria-label="Remove folder"
+                        onClick={() => removeWatchFolder(i)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <button className="dl-btn add-trigger" onClick={addWatchFolder}>
+                  Add folder
+                </button>
+              </div>
+            )}
+
+            {draft.capture_torrent_downloads && (
+              <div className="dim watch-config-note">
+                A .torrent you download through moin that files into this category
+                is re-added as a torrent (into this category's save folder), rather
+                than left as a file. Uncategorized downloads are untouched.
+              </div>
+            )}
           </div>
 
           <div className="cat-section">
@@ -487,13 +659,18 @@ function CategoryEditor({ initial, onSave, onCancel }: EditorProps) {
             </button>
           </div>
 
+          <AutomationEditor
+            automation={draft.automation}
+            onChange={(automation) => patch({ automation })}
+          />
+
           <div className="setting-row">
             <div>
               <div className="setting-label">Download even if triggers fail</div>
               <div className="dim">
-                For automated sources (watched folders / URL lists, coming
-                later): download non-matching items anyway, uncategorized,
-                instead of skipping them. No effect on manual adds.
+                For watched folders: grab a dropped torrent that doesn't match
+                the triggers above anyway, uncategorized, instead of skipping it.
+                No effect on manual adds.
               </div>
             </div>
             <Switch
@@ -629,78 +806,4 @@ function TriggerFields({ trigger, onChange }: FieldsProps) {
         </div>
       );
   }
-}
-
-interface TokenInputProps {
-  values: string[];
-  placeholder?: string;
-  /** Clean a raw entry before it becomes a chip; a falsy result is dropped. */
-  normalize?: (s: string) => string;
-  onChange: (values: string[]) => void;
-}
-
-/** A chip/token field: type a value and press space (or Enter/comma) to turn it
- *  into a chip; backspace on an empty field pops the last chip back to text for
- *  editing; clicking a chip pops it back too. */
-function TokenInput({ values, placeholder, normalize, onChange }: TokenInputProps) {
-  const [text, setText] = useState("");
-  const clean = (s: string) => (normalize ? normalize(s) : s.trim());
-
-  const commit = () => {
-    const v = clean(text);
-    setText("");
-    if (v && !values.includes(v)) onChange([...values, v]);
-  };
-
-  const editLast = () => {
-    if (values.length === 0) return;
-    const last = values[values.length - 1];
-    onChange(values.slice(0, -1));
-    setText(last);
-  };
-
-  const onKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (e.key === " " || e.key === "Enter" || e.key === ",") {
-      e.preventDefault();
-      commit();
-    } else if (e.key === "Backspace" && text === "") {
-      e.preventDefault();
-      editLast();
-    }
-  };
-
-  const editChip = (i: number) => {
-    // Stash any half-typed value as a chip first, then pull chip i into the field.
-    const pending = clean(text);
-    const withPending =
-      pending && !values.includes(pending) ? [...values, pending] : values;
-    const target = withPending[i];
-    onChange(withPending.filter((_, j) => j !== i));
-    setText(target);
-  };
-
-  return (
-    <div className="token-input">
-      {values.map((v, i) => (
-        <button
-          key={i}
-          className="token"
-          onClick={() => editChip(i)}
-          title="Click to edit"
-        >
-          {v}
-        </button>
-      ))}
-      <input
-        className="token-text selectable"
-        type="text"
-        value={text}
-        placeholder={values.length === 0 ? placeholder : ""}
-        spellCheck={false}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={onKeyDown}
-        onBlur={commit}
-      />
-    </div>
-  );
 }

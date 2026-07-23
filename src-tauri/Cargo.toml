@@ -72,6 +72,10 @@ uuid = { version = "1", features = ["v4"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
 
+# Category auto-rename rules: optional user-supplied regex find/replace over
+# torrent file names (literal + preset transforms need no crate; regex does).
+regex = "1"
+
 # Loopback RPC server the browser extension posts captured downloads to. Small,
 # pure-Rust, blocking HTTP/1.1 — it runs on its own thread and calls into the
 # (thread-safe) engine, so it stays off Tauri's async runtime.

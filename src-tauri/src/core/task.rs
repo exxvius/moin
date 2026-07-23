@@ -55,7 +55,11 @@ pub struct ResolvedTorrent {
 }
 
 /// The resolved torrent plus the engine's filing suggestions, sent to the
-/// add-torrent modal so it can pre-fill the save folder and category.
+/// add-torrent modal so it can pre-fill the save folder and category. When a
+/// category with automation is suggested, its exclusions are already reflected in
+/// `resolved.files[].selected` and its renames in `resolved.files[].path`, and
+/// `suggested_layout` carries its layout — so the modal opens with automation
+/// applied but every choice still overridable.
 #[derive(Debug, Clone, Serialize)]
 pub struct TorrentPreview {
     #[serde(flatten)]
@@ -65,6 +69,9 @@ pub struct TorrentPreview {
     /// Folder the download would default to (the suggested category's folder, or
     /// the plain download dir) — the modal shows it and lets the user override.
     pub default_dir: String,
+    /// Content layout the suggested category prefers (the modal pre-selects it).
+    /// `Original` when nothing is suggested.
+    pub suggested_layout: super::category::LayoutMode,
 }
 
 /// One connected peer, for the detail panel's Peers tab.

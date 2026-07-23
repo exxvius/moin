@@ -218,48 +218,84 @@
   width: 22px;
   flex: none;
 }
-.icon-head {
-  display: flex;
+/* Compact trigger for the color / icon pickers: a padded rounded box with the
+   current swatch (or icon) as a rounded square inside it — not a full-width
+   Select-style trigger. */
+.grid-trigger {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-.icon-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(38px, 1fr));
-  gap: var(--space-1);
-  margin-top: var(--space-3);
-  max-height: 200px;
-  overflow-y: auto;
-  padding: var(--space-1);
-  border: 1px solid var(--border);
+  justify-content: center;
+  padding: var(--space-2);
   border-radius: var(--radius);
+  border: 1px solid var(--border);
   background: var(--control-bg);
+  box-shadow: var(--control-shadow);
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease);
 }
-.icon-swatch {
-  display: flex;
+.grid-trigger:hover,
+.grid-sel.open .grid-trigger {
+  border-color: color-mix(in oklab, var(--accent) 50%, var(--border-strong));
+}
+
+/* Grid dropdown for the color / icon pickers: a scrollable wrapping grid of
+   square cells inside a portaled menu (see GridPicker.tsx). Shares the frosted
+   look of the plain Select menu; the column template is set inline. */
+.grid-menu {
+  display: grid;
+  gap: var(--space-1);
+  max-height: 300px;
+  overflow-y: auto;
+  padding: var(--space-2);
+  background: var(--menu-bg);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--menu-border);
+  border-radius: var(--radius);
+  box-shadow:
+    var(--glass-highlight),
+    0 20px 44px -18px oklch(0% 0 0 / 0.8);
+  z-index: 300;
+  animation: sel-in var(--duration-fast) var(--ease);
+}
+.grid-cell {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   aspect-ratio: 1;
+  padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: none;
-  color: var(--text-dim);
+  color: inherit;
   cursor: pointer;
   transition:
     border-color var(--duration-fast) var(--ease),
-    background var(--duration-fast) var(--ease),
-    color var(--duration-fast) var(--ease);
+    background var(--duration-fast) var(--ease);
 }
-.icon-swatch:hover {
-  border-color: var(--border-strong);
-  color: inherit;
+.grid-cell:hover {
   background: color-mix(in oklab, var(--accent) 8%, transparent);
 }
-.icon-swatch.on {
+.grid-cell.selected {
   border-color: var(--accent);
-  color: inherit;
   background: var(--accent-quiet);
+}
+/* A color square, used in the trigger and the color cells. */
+.grid-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+.grid-swatch.no-color {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--text-faint);
+}
+/* "Match category color" — the category swatch with a dashed ring to read as an
+   inherit rather than a literal pick. */
+.grid-swatch.inherit {
+  outline: 1.5px dashed var(--text-faint);
+  outline-offset: 2px;
 }
 
 /* Categories page fills the height like the downloads panel. */
@@ -526,6 +562,61 @@
 }
 .size-input {
   width: 8rem;
+}
+
+/* ---- Category automation editor ---- */
+/* Divider that opens the automation block inside the category editor. */
+.cat-section-head {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+/* Rename rule: find → replace inputs plus a regex toggle, on one line. */
+.rename-fields {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.rename-input {
+  flex: 1;
+  min-width: 0;
+}
+.rename-regex {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+/* Revealed under the Sources chips when the watched-folder source is on. */
+.watch-config {
+  margin-top: var(--space-3);
+}
+.watch-config-note {
+  margin-top: var(--space-3);
+}
+
+/* Watched-folder list: one path per row with a Remove button. */
+.watch-folders {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+}
+.watch-folder-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.watch-folder-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---- Browser integration ----
@@ -1765,16 +1856,81 @@
 
 /* Toolbar: filter dropdowns on the left, name search on the right. More
    dropdowns (category, tag…) will join the filter row later. */
+/* One row when it fits, two when it doesn't (a container query on the toolbar's
+   own width, not the viewport). Narrow = the 2×2 grid below: status top-left,
+   search + add top-right, category bottom-left, sort bottom-right. */
 .dl-toolbar {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas:
+    "status   search"
+    "category sort";
+  gap: var(--space-3);
+  align-items: center;
+}
+.dl-f-status {
+  grid-area: status;
+  justify-self: start;
+}
+.dl-f-category {
+  grid-area: category;
+  justify-self: start;
+}
+.dl-sort {
+  grid-area: sort;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.dl-search-group {
+  grid-area: search;
+  justify-self: stretch;
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  flex-wrap: wrap;
+  justify-content: flex-end;
 }
-.filter-row {
-  display: flex;
-  gap: var(--space-2);
-  flex-wrap: wrap;
+/* Wide enough for one row: pack all four left to right, search fills to the add. */
+@container (min-width: 1000px) {
+  .dl-toolbar {
+    grid-template-columns: auto auto auto 1fr;
+    grid-template-areas: "status category sort search";
+  }
+  .dl-sort {
+    justify-self: start;
+  }
+}
+/* Muted placeholder for the Sort-by trigger when nothing is sorted. Plain color
+   only — unlike `.dim`, no top margin (which stretched the trigger taller). */
+.sort-ph {
+  color: var(--text-faint);
+}
+/* The sort-direction toggle beside the Sort-by selector. */
+.sort-dir {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  padding: 0;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--control-bg);
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    border-color 150ms var(--ease),
+    color 150ms var(--ease);
+}
+.sort-dir:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--accent) 50%, var(--border-strong));
+  color: var(--accent);
+}
+.sort-dir:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 /* A filter option: label on the left, muted count on the right, filling the
    full width so the count sits flush to the edge (no trailing gap). */
@@ -1791,8 +1947,9 @@
   font-variant-numeric: tabular-nums;
 }
 .dl-search {
-  margin-left: auto;
-  width: min(280px, 40vw);
+  flex: 1 1 auto;
+  min-width: 140px;
+  max-width: 420px;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
@@ -1835,16 +1992,19 @@
   flex: 1;
   min-width: 0; /* shrink to the container instead of the grid's min-content */
   min-height: 0;
-  overflow: clip;
+  /* Native vertical scroll; clip the sides so a row's glow escapes only through
+     the ghost layer behind, never past the viewport edge. */
+  overflow-y: auto;
+  overflow-x: clip;
+  overscroll-behavior: contain;
+  scrollbar-width: none; /* hide the native bar — the custom .ss-bar stands in */
 }
-/* The moving list. A transform (not scrollTop) offsets it; keeping it on the
-   compositor makes the eased scroll cheap. */
-.ss-content {
-  will-change: transform;
+.ss-view::-webkit-scrollbar {
+  display: none;
 }
-/* Pinned header, floated over the viewport (a transform-scrolled list can't use
-   position: sticky). It sits outside the masked viewport so its own frost and
-   shadow aren't clipped; it spans the view width, stopping before the bar. */
+/* Pinned header, floated over the viewport rather than scrolled inside it, so its
+   frost and shadow aren't clipped by the scroll box; the content is padded down by
+   its height. It spans the view width, stopping before the bar. */
 .ss-header {
   position: absolute;
   top: 0;
@@ -2052,11 +2212,12 @@
   flex: none;
   --tint-start: 0%;
   --tint-end: 45%;
-  /* Categorized cards carry a faint tint of their category color on the border
-     even at rest (--cat is set only when the task has a colored category);
-     hover/select brighten it. Uncategorized cards keep the neutral border. */
+  /* The border carries a faint tint of the category's icon color at rest
+     (--cat-glow is set only when the category has a color); hover/select brighten
+     it. Uncategorized cards keep the neutral border. The background tint uses the
+     category's main color separately (--cat, on the ::before overlay). */
   border: 1px solid
-    color-mix(in oklab, var(--cat, transparent) 24%, var(--glass-border));
+    color-mix(in oklab, var(--cat-glow, transparent) 24%, var(--glass-border));
   border-radius: var(--radius-sm);
   background: var(--glass-bg);
   box-shadow: var(--glass-highlight);
@@ -2100,10 +2261,10 @@
 .dl-card.selected {
   --tint-start: 0%;
   --tint-end: 130%;
-  /* Category color when categorized, else the theme accent. */
+  /* Icon color when categorized, else the theme accent. */
   border-color: color-mix(
     in oklab,
-    var(--cat, var(--accent)) 32%,
+    var(--cat-glow, var(--accent)) 32%,
     var(--glass-border)
   );
 }
@@ -2112,7 +2273,7 @@
 .dl-card.selected {
   border-color: color-mix(
     in oklab,
-    var(--cat, var(--accent)) 55%,
+    var(--cat-glow, var(--accent)) 55%,
     var(--glass-border)
   );
 }
@@ -2562,6 +2723,10 @@
   padding: var(--space-4);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+  /* Query container for the toolbar's one-row/two-row switch — the query targets
+     descendants (`.dl-toolbar`), so it lives on the panel, not the toolbar. Only
+     the inline axis is contained, so the list's vertical flex/scroll is untouched. */
+  container-type: inline-size;
 }
 
 /* Bottom status bar — pinned to the bottom of the view. */

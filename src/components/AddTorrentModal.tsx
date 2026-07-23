@@ -57,7 +57,7 @@ export function AddTorrentModal({ source, onClose }: Props) {
         setContentFolder(p.name?.trim() || "torrent");
         setDir(p.default_dir);
         setCategory(p.suggested_category ?? "");
-        setLayout("original");
+        setLayout(p.suggested_layout ?? "original");
       })
       .catch((e) => {
         if (alive) setError(e instanceof Error ? e.message : String(e));
@@ -310,7 +310,12 @@ export function AddTorrentModal({ source, onClose }: Props) {
                   value: c.id,
                   label: (
                     <span className="accent-option">
-                      <CategoryIcon icon={c.icon} color={c.color} size={16} />
+                      <CategoryIcon
+                        icon={c.icon}
+                        color={c.color}
+                        iconColor={c.icon_color}
+                        size={16}
+                      />
                       {c.name}
                     </span>
                   ),

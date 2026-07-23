@@ -329,13 +329,14 @@
 .cat-card:hover::after {
   --glow-radius: 3000px;
 }
-/* Download rows use their category color when categorized, else the theme accent
-   for the proximity glow (rather than the status tone or a flat white). */
+/* Download rows use their category's icon color when categorized, else the theme
+   accent for the proximity glow (matching the border; the background tint uses the
+   category's main color via --cat). */
 .dl-card::after {
   background: radial-gradient(
     var(--glow-radius) circle at var(--mx, 50%) var(--my, 50%),
-    color-mix(in oklab, var(--cat, var(--accent)) 75%, white),
-    color-mix(in oklab, var(--cat, var(--accent)) 30%, transparent) 45%,
+    color-mix(in oklab, var(--cat-glow, var(--accent)) 75%, white),
+    color-mix(in oklab, var(--cat-glow, var(--accent)) 30%, transparent) 45%,
     transparent 66%
   );
 }
