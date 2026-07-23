@@ -29,6 +29,9 @@ export function AddTorrentModal({ source, onClose }: Props) {
   const [picked, setPicked] = useState<boolean[]>([]);
   const [dir, setDir] = useState("");
   const [category, setCategory] = useState("");
+  // Once the user picks a folder by hand (Browse…), stop auto-following the
+  // category's folder so their choice sticks.
+  const [dirTouched, setDirTouched] = useState(false);
   // Content layout, qBittorrent-style: keep the torrent's own structure
   // (Original), always nest under a torrent-named folder (subfolder), or flatten
   // files straight into the save folder (flat).
@@ -142,7 +145,22 @@ export function AddTorrentModal({ source, onClose }: Props) {
       title: "Choose where to save",
       defaultPath: dir || undefined,
     });
-    if (typeof chosen === "string") setDir(chosen);
+    if (typeof chosen === "string") {
+      setDir(chosen);
+      setDirTouched(true);
+    }
+  };
+
+  // Keep the save folder in step with the chosen category (unless the user has
+  // picked a folder by hand). The backend resolves the exact folder so it matches
+  // where the download would actually land.
+  const changeCategory = (id: string) => {
+    setCategory(id);
+    if (dirTouched) return;
+    api
+      .categoryFolder(id || null)
+      .then(setDir)
+      .catch(() => {});
   };
 
   const add = async () => {
@@ -285,7 +303,7 @@ export function AddTorrentModal({ source, onClose }: Props) {
               value={category}
               ariaLabel="Category"
               caret
-              onChange={setCategory}
+              onChange={changeCategory}
               options={[
                 { value: "", label: "Uncategorized" },
                 ...store.categories.map((c) => ({

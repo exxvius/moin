@@ -20,6 +20,10 @@ const DEFAULT_CONNECT_TIMEOUT: u64 = 30;
 /// Loopback port the browser-integration RPC server listens on. A fixed default
 /// keeps the extension zero-config; the user can move it if something else has it.
 const DEFAULT_RPC_PORT: u16 = 47653;
+/// Seed until the upload/download ratio reaches this, then stop. 0 = seed forever.
+const DEFAULT_SEED_RATIO_LIMIT: f64 = 0.0;
+/// Seed for at most this many minutes after finishing, then stop. 0 = forever.
+const DEFAULT_SEED_TIME_LIMIT_MINS: u64 = 0;
 
 /// What happens to a download's file when it's moved to a different category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -80,6 +84,14 @@ pub struct Settings {
     /// Loopback port the RPC server binds. Applied at startup.
     #[serde(default = "default_rpc_port")]
     pub rpc_port: u16,
+    /// Stop seeding a torrent once its upload/download ratio reaches this. 0 means
+    /// seed indefinitely (until stopped by hand or by the time limit).
+    #[serde(default = "default_seed_ratio_limit")]
+    pub seed_ratio_limit: f64,
+    /// Stop seeding a torrent this many minutes after it finishes downloading. 0
+    /// means no time limit. Whichever of ratio/time is hit first stops seeding.
+    #[serde(default = "default_seed_time_limit_mins")]
+    pub seed_time_limit_mins: u64,
     /// Bearer token the extension must present on `/add`. Generated on first run
     /// (see `Engine::new`) and read live, so regenerating it takes effect at once.
     #[serde(default)]
@@ -110,6 +122,14 @@ fn default_rpc_port() -> u16 {
     DEFAULT_RPC_PORT
 }
 
+fn default_seed_ratio_limit() -> f64 {
+    DEFAULT_SEED_RATIO_LIMIT
+}
+
+fn default_seed_time_limit_mins() -> u64 {
+    DEFAULT_SEED_TIME_LIMIT_MINS
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -127,6 +147,8 @@ impl Default for Settings {
             rpc_enabled: true,
             rpc_port: DEFAULT_RPC_PORT,
             rpc_token: String::new(),
+            seed_ratio_limit: DEFAULT_SEED_RATIO_LIMIT,
+            seed_time_limit_mins: DEFAULT_SEED_TIME_LIMIT_MINS,
         }
     }
 }

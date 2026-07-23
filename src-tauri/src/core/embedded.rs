@@ -104,7 +104,7 @@ impl DownloadBackend for EmbeddedBackend {
                 )
                 .await
             }
-            TaskKind::Torrent => self.torrent.download(&task, &control, &progress).await,
+            TaskKind::Torrent => self.torrent.download(&task, &opts, &control, &progress).await,
             _ => Outcome::Failed("the built-in backend can't handle this source yet".to_string()),
         }
     }

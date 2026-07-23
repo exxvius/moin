@@ -128,6 +128,7 @@ impl Store {
                     peers: 0,
                     up_speed: 0,
                     own_dir: r.get::<_, i64>(21)? != 0,
+                    force_seed: false,
                 })
             })
             .map_err(err)?;
@@ -336,6 +337,7 @@ mod tests {
             peers: 0,
             up_speed: 0,
             own_dir: false,
+            force_seed: false,
         }
     }
 

@@ -39,6 +39,7 @@ export const api = {
   listDownloads: () => invoke<Task[]>("list_downloads"),
   pauseDownload: (id: string) => invoke<void>("pause_download", { id }),
   resumeDownload: (id: string) => invoke<void>("resume_download", { id }),
+  startSeeding: (id: string) => invoke<void>("start_seeding", { id }),
   cancelDownload: (id: string) => invoke<void>("cancel_download", { id }),
   removeDownload: (id: string) => invoke<void>("remove_download", { id }),
   deleteDownload: (id: string) => invoke<void>("delete_download", { id }),
@@ -50,6 +51,8 @@ export const api = {
   listBackends: () => invoke<BackendInfo[]>("list_backends"),
   regenerateRpcToken: () => invoke<string>("regenerate_rpc_token"),
   defaultDownloadDir: () => invoke<string>("default_download_dir"),
+  categoryFolder: (category: string | null) =>
+    invoke<string>("category_folder", { category }),
   toolStatus: () => invoke<ToolStatus>("tool_status"),
   downloadTool: () => invoke<ToolStatus>("download_tool"),
   setToolPath: (path: string | null) =>

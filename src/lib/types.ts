@@ -143,6 +143,10 @@ export interface Settings {
   /** Bearer token the browser extension must present. Read live, so regenerating
    *  it takes effect immediately. */
   rpc_token: string;
+  /** Stop seeding a torrent once its ratio reaches this. 0 = seed forever. */
+  seed_ratio_limit: number;
+  /** Stop seeding a torrent this many minutes after it finishes. 0 = no limit. */
+  seed_time_limit_mins: number;
 }
 
 export interface BackendInfo {

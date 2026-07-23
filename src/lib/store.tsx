@@ -134,6 +134,7 @@ interface StoreValue {
   add: (url: string, category?: string | null) => Promise<void>;
   pause: (id: string) => Promise<void>;
   resume: (id: string) => Promise<void>;
+  startSeeding: (id: string) => Promise<void>;
   cancel: (id: string) => Promise<void>;
   remove: (id: string) => Promise<void>;
   delete: (id: string) => Promise<void>;
@@ -192,6 +193,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
       pause: (id) => api.pauseDownload(id),
       resume: (id) => api.resumeDownload(id),
+      startSeeding: (id) => api.startSeeding(id),
       cancel: (id) => api.cancelDownload(id),
       remove: (id) => api.removeDownload(id),
       delete: (id) => api.deleteDownload(id),

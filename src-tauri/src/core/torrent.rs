@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use librqbit::{
     torrent_from_bytes, AddTorrent, AddTorrentOptions, AddTorrentResponse, ByteBufOwned, Magnet,
@@ -16,7 +16,7 @@ use librqbit::{
 };
 use tokio::sync::OnceCell;
 
-use super::backend::{Control, Outcome, ProgressFn, Signal, TorrentTick};
+use super::backend::{Control, Outcome, ProgressFn, Signal, TorrentTick, TransferOpts};
 use super::task::{
     PeerInfo, ResolvedTorrent, Task, TaskStatus, TorrentDetails, TorrentFile, TorrentSource,
 };
@@ -251,8 +251,15 @@ impl TorrentEngine {
     }
 
     /// Drive one torrent task to a terminal [`Outcome`]. `task.dest` is the output
-    /// folder; librqbit manages its own partials + fastresume inside it.
-    pub async fn download(&self, task: &Task, control: &Control, progress: &ProgressFn) -> Outcome {
+    /// folder; librqbit manages its own partials + fastresume inside it. `opts`
+    /// carries the seed ratio/time limits that stop seeding once hit.
+    pub async fn download(
+        &self,
+        task: &Task,
+        opts: &TransferOpts,
+        control: &Control,
+        progress: &ProgressFn,
+    ) -> Outcome {
         let session = match self.session().await {
             Ok(s) => s,
             Err(e) => return Outcome::Failed(e),
@@ -284,7 +291,7 @@ impl TorrentEngine {
                 .map(|f| Some(PathBuf::from(&f.path)))
                 .collect()
         });
-        let opts = AddTorrentOptions {
+        let add_opts = AddTorrentOptions {
             output_folder: Some(task.dest.clone()),
             // Write over existing partials so a resume picks up where it left off.
             overwrite: true,
@@ -293,7 +300,7 @@ impl TorrentEngine {
             ..Default::default()
         };
 
-        let handle = match session.add_torrent(add, Some(opts)).await {
+        let handle = match session.add_torrent(add, Some(add_opts)).await {
             Ok(resp) => match resp.into_handle() {
                 Some(h) => h,
                 None => return Outcome::Failed("torrent produced no handle".to_string()),
@@ -341,10 +348,32 @@ impl TorrentEngine {
 
         // Upload speed is derived from how much `uploaded` grew between polls.
         let mut last_uploaded = 0u64;
+        // When this seeding session began — set the first time we observe finished,
+        // so the seed-time limit counts from completion, not from add.
+        let mut seed_start: Option<Instant> = None;
         let info_hash = handle.info_hash();
         loop {
             let stats = handle.stats();
             let finished = stats.finished && stats.total_bytes > 0;
+
+            // Once finished, stop seeding when the ratio or time limit is hit (0 /
+            // zero means unlimited; a force-seed run passes both as unlimited). We
+            // pause the handle so uploading actually stops, then settle as done.
+            if finished {
+                let started = *seed_start.get_or_insert_with(Instant::now);
+                let ratio = if stats.total_bytes > 0 {
+                    stats.uploaded_bytes as f64 / stats.total_bytes as f64
+                } else {
+                    0.0
+                };
+                let ratio_hit = opts.seed_ratio_limit > 0.0 && ratio >= opts.seed_ratio_limit;
+                let time_hit =
+                    !opts.seed_time_limit.is_zero() && started.elapsed() >= opts.seed_time_limit;
+                if ratio_hit || time_hit {
+                    let _ = session.pause(&handle).await;
+                    return Outcome::Completed;
+                }
+            }
 
             match control.signal() {
                 Signal::Pause => {

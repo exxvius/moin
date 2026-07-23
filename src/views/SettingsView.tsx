@@ -30,6 +30,23 @@ const MIN_SPLIT_OPTIONS = [1, 2, 4, 8, 16, 32].map((m) => m * MIB);
 const STALL_OPTIONS = [30, 60, 120, 300, 0];
 // Seconds to wait to establish a connection; 0 = the OS default.
 const CONNECT_OPTIONS = [5, 10, 15, 30, 60, 0];
+// Seed until this upload/download ratio, then stop; 0 = seed forever.
+const SEED_RATIO_OPTIONS = [0, 0.5, 1, 1.5, 2, 3, 5];
+// Minutes to keep seeding after finishing, then stop; 0 = no time limit.
+const SEED_TIME_OPTIONS = [0, 30, 60, 120, 360, 720, 1440];
+
+/** "30 minutes" / "6 hours" / "1 day" for a whole number of minutes. */
+function minutesLabel(n: number): string {
+  if (n % 1440 === 0) {
+    const d = n / 1440;
+    return d === 1 ? "1 day" : `${d} days`;
+  }
+  if (n % 60 === 0) {
+    const h = n / 60;
+    return h === 1 ? "1 hour" : `${h} hours`;
+  }
+  return `${n} minutes`;
+}
 
 /** "45 seconds" / "2 minutes" for a whole number of seconds. */
 function secondsLabel(n: number): string {
@@ -350,6 +367,54 @@ export function SettingsView({
             options={CONNECT_OPTIONS.map((n) => ({
               value: String(n),
               label: n === 0 ? "No limit" : secondsLabel(n),
+            }))}
+          />
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-title">Torrents</div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Seed ratio limit</div>
+            <div className="dim">
+              Stop seeding a torrent once it has uploaded this much relative to
+              what it downloaded. Set to Unlimited to keep seeding until you stop
+              it by hand. You can always resume seeding a finished torrent from
+              the right-click menu.
+            </div>
+          </div>
+          <Select
+            value={String(settings?.seed_ratio_limit ?? 0)}
+            ariaLabel="Seed ratio limit"
+            caret
+            disabled={!settings}
+            onChange={(v) => patch({ seed_ratio_limit: Number(v) })}
+            options={SEED_RATIO_OPTIONS.map((n) => ({
+              value: String(n),
+              label: n === 0 ? "Unlimited" : n.toFixed(1),
+            }))}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Seed time limit</div>
+            <div className="dim">
+              Stop seeding this long after a torrent finishes downloading.
+              Whichever of the ratio or time limit is reached first stops it.
+            </div>
+          </div>
+          <Select
+            value={String(settings?.seed_time_limit_mins ?? 0)}
+            ariaLabel="Seed time limit"
+            caret
+            disabled={!settings}
+            onChange={(v) => patch({ seed_time_limit_mins: Number(v) })}
+            options={SEED_TIME_OPTIONS.map((n) => ({
+              value: String(n),
+              label: n === 0 ? "No limit" : minutesLabel(n),
             }))}
           />
         </div>

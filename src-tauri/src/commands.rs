@@ -129,6 +129,12 @@ pub async fn resume_download(state: State<'_, AppState>, id: String) -> Result<(
 }
 
 #[tauri::command]
+pub async fn start_seeding(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.engine.start_seeding(&id);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn cancel_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
     state.engine.cancel(&id).await;
     Ok(())
@@ -282,4 +288,17 @@ pub async fn move_to_category(
 #[tauri::command]
 pub fn default_download_dir(app: AppHandle, state: State<'_, AppState>) -> String {
     download_dir(&app, &state).to_string_lossy().into_owned()
+}
+
+/// The folder a download would save into under `category` — the category's
+/// folder override, or the default download folder. Lets the add-torrent modal
+/// keep its save folder in step as the chosen category changes.
+#[tauri::command]
+pub fn category_folder(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    category: Option<String>,
+) -> String {
+    let dir = download_dir(&app, &state);
+    state.engine.category_folder(category, dir)
 }

@@ -61,6 +61,12 @@ pub struct TransferOpts {
     /// How long a transfer may receive no data before it's declared stalled.
     /// `Duration::ZERO` means never — wait indefinitely for data to resume.
     pub stall_timeout: Duration,
+    /// Stop seeding a torrent once its ratio reaches this. 0 = seed indefinitely.
+    /// Non-torrent backends ignore it.
+    pub seed_ratio_limit: f64,
+    /// Stop seeding a torrent once it has seeded this long. `Duration::ZERO` =
+    /// no time limit. Whichever of ratio/time comes first wins.
+    pub seed_time_limit: Duration,
 }
 
 /// Network settings a backend applies to its client, refreshed when settings

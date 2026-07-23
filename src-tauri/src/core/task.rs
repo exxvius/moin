@@ -231,6 +231,12 @@ pub struct Task {
     /// other downloads) — we only ever delete our own files there, never the folder.
     #[serde(default)]
     pub own_dir: bool,
+    /// Transient: the user chose to keep seeding this torrent past the ratio/time
+    /// limit ("Start seeding" on a finished torrent). Read when the run starts to
+    /// disable the auto-stop for that session. Not persisted (seeding doesn't
+    /// survive a restart yet) and not sent to the UI.
+    #[serde(skip)]
+    pub force_seed: bool,
 }
 
 impl Task {

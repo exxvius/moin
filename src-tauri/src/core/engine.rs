@@ -260,6 +260,7 @@ impl Engine {
                 peers: 0,
                 up_speed: 0,
                 own_dir: false,
+                force_seed: false,
             };
             tasks.insert(task.id.clone(), Entry::idle(task.clone()));
             task
@@ -520,6 +521,7 @@ impl Engine {
                 peers: 0,
                 up_speed: 0,
                 own_dir,
+                force_seed: false,
             };
             tasks.insert(task.id.clone(), Entry::idle(task.clone()));
             task
@@ -567,6 +569,29 @@ impl Engine {
             {
                 return;
             }
+            entry.task.status = TaskStatus::Queued;
+            entry.task.error = None;
+            entry.task.updated_at = now_ms();
+            entry.task.clone()
+        };
+        self.persist_emit(&task);
+        Inner::pump(self.inner.clone());
+    }
+
+    /// Keep seeding a finished torrent past the ratio/time limit. Re-runs a
+    /// stopped (Completed) torrent in force-seed mode, so the auto-stop is lifted
+    /// for that session and it seeds until stopped by hand. No-op for a
+    /// non-torrent, a busy task, or one that's already running.
+    pub fn start_seeding(&self, id: &str) {
+        let task = {
+            let mut tasks = self.inner.tasks.lock().unwrap();
+            let Some(entry) = tasks.get_mut(id) else {
+                return;
+            };
+            if !entry.task.is_torrent() || entry.moving || entry.control.is_some() {
+                return;
+            }
+            entry.task.force_seed = true;
             entry.task.status = TaskStatus::Queued;
             entry.task.error = None;
             entry.task.updated_at = now_ms();
@@ -1002,6 +1027,20 @@ impl Engine {
         }
     }
 
+    /// The folder a download would save into under `category`: the category's
+    /// `save_dir` override if it sets one, else `default_dir`. Mirrors the
+    /// resolution in [`Self::add_http`] / [`Self::move_to_category`] so the
+    /// add-torrent modal can pre-fill the right folder as the category changes.
+    pub fn category_folder(&self, category: Option<String>, default_dir: PathBuf) -> String {
+        let cats = self.inner.categories.lock().unwrap();
+        let dir = category
+            .and_then(|id| cats.iter().find(|c| c.id == id).cloned())
+            .and_then(|c| c.save_dir)
+            .map(PathBuf::from)
+            .unwrap_or(default_dir);
+        dir.to_string_lossy().into_owned()
+    }
+
     /// Re-tag a download's category without touching its file (change-only mode).
     fn retag(&self, id: &str, category: Option<String>) {
         let task = {
@@ -1119,11 +1158,23 @@ impl Inner {
 
         let opts = {
             let s = inner.settings.lock().unwrap();
+            // A force-seed run (the user chose to keep seeding past the limit)
+            // ignores the auto-stop; a normal run honors the configured limits.
+            let (seed_ratio_limit, seed_time_limit) = if task.force_seed {
+                (0.0, Duration::ZERO)
+            } else {
+                (
+                    s.seed_ratio_limit,
+                    Duration::from_secs(s.seed_time_limit_mins.saturating_mul(60)),
+                )
+            };
             TransferOpts {
                 connections: s.connections,
                 min_split_size: s.min_split_size,
                 hide_part: s.hide_part_files,
                 stall_timeout: Duration::from_secs(s.stall_timeout_secs),
+                seed_ratio_limit,
+                seed_time_limit,
             }
         };
         let progress = Inner::make_progress(inner.clone(), id.clone());
@@ -1315,6 +1366,13 @@ impl Inner {
                         entry.task.error = Some(msg);
                     }
                 }
+                // The run has ended, so the live-only swarm readings are stale —
+                // zero them so a paused/stopped torrent doesn't keep showing peers
+                // or seeders that the detail panel (reading the session live) can't.
+                entry.task.peers = 0;
+                entry.task.seeders = 0;
+                entry.task.leechers = 0;
+                entry.task.up_speed = 0;
                 entry.task.updated_at = now_ms();
                 match entry.pending_move.take() {
                     // `begin_move` re-reads the just-settled status and flips it to
