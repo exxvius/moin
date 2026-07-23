@@ -834,9 +834,9 @@ function sourceLabel(tool: ToolStatus): string {
   }
 }
 
-/** The About + Update card: shows the running version and checks GitHub for a newer
- *  release on demand. "Get the update" opens the installer (or the release page) —
- *  a running app can't overwrite itself, so the actual swap is the installer's job. */
+/** The About card: an update check against GitHub plus a short credit + license
+ *  line. "Get the update" opens the installer (or the release page) — a running app
+ *  can't overwrite itself, so the actual swap is the installer's job. */
 function AboutCard() {
   const [version, setVersion] = useState("");
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
@@ -862,8 +862,6 @@ function AboutCard() {
     }
   };
 
-  const open = (url: string) => openUrl(url).catch(() => {});
-
   const status = error
     ? error
     : !update
@@ -878,26 +876,13 @@ function AboutCard() {
 
       <div className="setting-row">
         <div>
-          <div className="setting-label">moin{version ? ` ${version}` : ""}</div>
-          <div className="dim">
-            A one-stop download manager for direct links, torrents, and media
-            sites.
-          </div>
-        </div>
-        <button className="dl-btn" onClick={() => open(REPO_URL)}>
-          View on GitHub
-        </button>
-      </div>
-
-      <div className="setting-row">
-        <div>
           <div className="setting-label">Updates</div>
           <div className={`dim${error ? " update-error" : ""}`}>{status}</div>
         </div>
         {update?.available ? (
           <button
             className="dl-btn"
-            onClick={() => open(update.asset_url ?? update.page_url)}
+            onClick={() => openUrl(update.asset_url ?? update.page_url).catch(() => {})}
           >
             Get the update
           </button>
@@ -911,6 +896,16 @@ function AboutCard() {
       {update?.available && update.notes && (
         <pre className="update-notes">{update.notes}</pre>
       )}
+
+      <div className="about-foot dim">
+        <span>
+          moin{version ? ` ${version}` : ""} · Developed by{" "}
+          <button className="link-btn" onClick={() => openUrl(REPO_URL).catch(() => {})}>
+            Exxvius
+          </button>
+        </span>
+        <span>Free and open source under the MIT License.</span>
+      </div>
     </div>
   );
 }

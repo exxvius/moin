@@ -909,13 +909,23 @@
   grid-template-columns: repeat(3, 1fr);
   border-bottom: 1px solid
     color-mix(in oklab, var(--glass-border) 75%, transparent);
-  margin: 0 calc(-1 * var(--space-5)) var(--space-4);
+  /* Bleed to all three edges of the card padding so the tab strip sits flush at
+     the very top, no gap above it. */
+  margin: calc(-1 * var(--space-5)) calc(-1 * var(--space-5)) var(--space-4);
 }
 .settings-tab {
   position: relative;
   padding: var(--space-3) var(--space-2);
   border: none;
   background: none;
+}
+/* Match the card's rounded top corners so an active/hover tab background doesn't
+   square off the first/last corner. */
+.settings-tab:first-child {
+  border-top-left-radius: var(--radius-lg);
+}
+.settings-tab:last-child {
+  border-top-right-radius: var(--radius-lg);
   color: var(--text-dim);
   font-size: var(--text-base);
   font-weight: 550;
@@ -964,6 +974,30 @@
 }
 .update-error {
   color: var(--bad, #e5484d);
+}
+
+/* The About card footer: credit + license, stacked and quiet. */
+.about-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid
+    color-mix(in oklab, var(--glass-border) 60%, transparent);
+  font-size: var(--text-sm);
+}
+/* An inline text link rendered as a button (keeps click handling in JS). */
+.link-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.link-btn:hover {
+  text-decoration: underline;
 }
 .td-empty {
   padding: var(--space-6) 0;
