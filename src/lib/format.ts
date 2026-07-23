@@ -23,11 +23,16 @@ export function formatSpeed(bytesPerSec: number): string {
 export function formatEta(remaining: number | null, speed: number): string {
   if (remaining == null || speed <= 0) return "—";
   let s = Math.round(remaining / speed);
+  // Anything beyond ~99 days is meaningless (a trickle at a few B/s) — show ∞.
+  if (s > 99 * 86400) return "∞";
   if (s < 60) return `${s}s`;
+  const d = Math.floor(s / 86400);
+  s -= d * 86400;
   const h = Math.floor(s / 3600);
   s -= h * 3600;
   const m = Math.floor(s / 60);
   s -= m * 60;
+  if (d > 0) return `${d}d ${h}h`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m ${s}s`;
 }

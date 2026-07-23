@@ -39,6 +39,9 @@
   --ok: oklch(76% 0.16 158);
   --warn: oklch(83% 0.15 85);
   --bad: oklch(68% 0.2 25);
+  /* Seeding: a teal, between the green "done" and the accent, reading as
+     "finished but still active (uploading)". */
+  --seed: oklch(78% 0.13 195);
   --info: oklch(76% 0.12 210);
   --violet: oklch(74% 0.15 290);
 

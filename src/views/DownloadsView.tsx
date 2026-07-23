@@ -5,9 +5,12 @@ import type {
   ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { ArrowDown, ArrowUp, Users, Sprout } from "lucide-react";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { AddIcon, SortArrowIcon } from "../components/icons";
 import { AddDownloadModal } from "../components/AddDownloadModal";
+import { AddTorrentModal } from "../components/AddTorrentModal";
+import { TorrentDetail } from "../components/TorrentDetail";
 import { Select } from "../components/Select";
 import { SmoothScroll } from "../components/SmoothScroll";
 import { ContextMenu, type MenuEntry } from "../components/ContextMenu";
@@ -30,10 +33,12 @@ import type { Task, TaskStatus } from "../lib/types";
 const STATUS_LABEL: Record<TaskStatus, string> = {
   queued: "Queued",
   connecting: "Connecting",
+  checking: "Checking",
   downloading: "Downloading",
   paused: "Paused",
   moving: "Moving",
   completed: "Done",
+  seeding: "Seeding",
   failed: "Failed",
   stalled: "Stalled",
   canceled: "Canceled",
@@ -42,10 +47,12 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 const STATUS_CLASS: Record<TaskStatus, string> = {
   queued: "dim",
   connecting: "accent",
+  checking: "warn",
   downloading: "accent",
   paused: "warn",
   moving: "accent",
   completed: "ok",
+  seeding: "seed",
   failed: "bad",
   stalled: "warn",
   canceled: "faint",
@@ -172,14 +179,16 @@ function fitColumns(all: Column[], avail: number): Column[] {
 
 const STATUS_RANK: Record<TaskStatus, number> = {
   downloading: 0,
-  moving: 1,
-  connecting: 2,
-  queued: 3,
-  paused: 4,
-  stalled: 5,
-  completed: 6,
-  failed: 7,
-  canceled: 8,
+  checking: 1,
+  seeding: 2,
+  moving: 3,
+  connecting: 4,
+  queued: 5,
+  paused: 6,
+  stalled: 7,
+  completed: 8,
+  failed: 9,
+  canceled: 10,
 };
 
 // The live bar shimmer/glow cycle (must match `bar-flow`/`bar-pulse` in CSS).
@@ -330,6 +339,8 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   const [error, setError] = useState<string | null>(null);
   // The add-a-download modal, opened from the "+" in the header.
   const [showAdd, setShowAdd] = useState(false);
+  // Set to a magnet/.torrent source while the add-torrent modal is open.
+  const [torrentSource, setTorrentSource] = useState<string | null>(null);
   // Live width of the list, so columns can drop out when the window is narrow.
   const [listWidth, setListWidth] = useState(0);
 
@@ -593,6 +604,10 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
       ];
       if (task.status === "completed") {
         items.push({
+          label: task.kind === "torrent" ? "Open folder" : "Open",
+          onClick: () => openPath(task.dest).catch(() => {}),
+        });
+        items.push({
           label: "Show in folder",
           onClick: () => revealItemInDir(task.dest).catch(() => {}),
         });
@@ -620,10 +635,17 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
       task.status === "stalled"
     ) {
       items.push({ label: "Try again", onClick: () => store.resume(task.id) });
+    } else if (task.status === "seeding") {
+      // A seeding torrent is done downloading; pausing it stops the upload.
+      items.push({ label: "Stop seeding", onClick: () => store.pause(task.id) });
     } else if (task.status !== "completed") {
       items.push({ label: "Pause download", onClick: () => store.pause(task.id) });
     }
-    if (task.status === "completed") {
+    if (task.status === "completed" || task.status === "seeding") {
+      items.push({
+        label: task.kind === "torrent" ? "Open folder" : "Open",
+        onClick: () => openPath(task.dest).catch(() => {}),
+      });
       items.push({
         label: "Show in folder",
         onClick: () => revealItemInDir(task.dest).catch(() => {}),
@@ -635,6 +657,7 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
 
     const active =
       task.status !== "completed" &&
+      task.status !== "seeding" &&
       task.status !== "failed" &&
       task.status !== "canceled" &&
       task.status !== "stalled";
@@ -646,8 +669,12 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
       });
     }
 
-    if (task.status === "completed") {
-      // A finished file exists, so let the user choose to keep or delete it.
+    // A finished download, or *any* torrent, has real files on disk (a torrent's
+    // partial data is genuine content) — let the user choose keep vs delete. Only
+    // an incomplete HTTP download has a throwaway `.part` that one Remove wipes.
+    const isTorrent = task.kind === "torrent";
+    const noun = isTorrent ? "files" : "file";
+    if (task.status === "completed" || isTorrent) {
       if (!confirmRemove) {
         items.push({
           label: "Remove…",
@@ -657,18 +684,17 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
         });
       } else {
         items.push({
-          label: "Remove from list (keep file)",
+          label: `Remove from list (keep ${noun})`,
           onClick: () => store.remove(task.id),
         });
         items.push({
-          label: "Delete file from disk",
+          label: `Delete ${noun} from disk`,
           danger: true,
           onClick: () =>
             store.delete(task.id).catch((e) => setError(errorText(e))),
         });
       }
     } else {
-      // Incomplete/failed: nothing worth keeping — one Remove wipes the partial.
       items.push({
         label: "Remove from list",
         danger: true,
@@ -782,7 +808,21 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
         <p>Everything moin is working on.</p>
       </div>
 
-      {showAdd && <AddDownloadModal onClose={() => setShowAdd(false)} />}
+      {showAdd && (
+        <AddDownloadModal
+          onClose={() => setShowAdd(false)}
+          onTorrent={(source) => {
+            setShowAdd(false);
+            setTorrentSource(source);
+          }}
+        />
+      )}
+      {torrentSource && (
+        <AddTorrentModal
+          source={torrentSource}
+          onClose={() => setTorrentSource(null)}
+        />
+      )}
 
       <div className="card stat-card">
         <div className="stat-hero">
@@ -1092,18 +1132,21 @@ function Card({
 }: CardProps) {
   const cat = findCategory(categories, task.category);
   const dl = task.status === "downloading";
+  const checking = task.status === "checking";
   const moving = task.status === "moving";
   // While moving, the bar tracks the file relocation, not the download bytes.
   const movePct =
     moving && move && move.total ? percent(move.moved, move.total) : null;
   const pct = moving ? movePct : percent(task.received, task.total);
   const remaining = task.total != null ? task.total - task.received : null;
-  // Indeterminate (sliding) bar only when there's genuinely no progress to show.
-  // A queued/connecting task that already has partial progress shows a real bar.
+  // Indeterminate (sliding) bar only when there's genuinely no percentage to
+  // show yet (e.g. a magnet still resolving). Checking reports verified bytes, so
+  // it shows a real, filling bar like any other progress.
   const indeterminate =
     pct == null &&
     (dl ||
       moving ||
+      checking ||
       task.status === "queued" ||
       task.status === "connecting");
   const live = (dl || moving) && !indeterminate;
@@ -1133,7 +1176,21 @@ function Card({
                 <CategoryIcon icon={cat.icon} color={cat.color} size={15} />
               </span>
             )}
-            <span className="dl-name-text">{task.filename}</span>
+            <span className="dl-name-col">
+              <span className="dl-name-text">{task.filename}</span>
+              {task.kind === "torrent" && (
+                <span className="dl-torrent-line dim">
+                  <ArrowDown size={12} strokeWidth={2.5} />
+                  {formatSpeed(dl ? speed : 0)}
+                  <ArrowUp size={12} strokeWidth={2.5} />
+                  {formatSpeed(task.up_speed ?? 0)}
+                  <Sprout size={12} strokeWidth={2.5} />
+                  {task.seeders ?? 0}
+                  <Users size={12} strokeWidth={2.5} />
+                  {task.peers ?? 0}
+                </span>
+              )}
+            </span>
           </span>
         );
       case "size":
@@ -1223,6 +1280,9 @@ function Card({
 
       <div className="dl-detail-wrap">
         <div className="dl-detail">
+          {task.kind === "torrent" ? (
+            <TorrentDetail task={task} speed={speed} />
+          ) : (
           <div className="dl-detail-grid">
             <div className="detail-item">
               <span className="dk">Downloaded</span>
@@ -1281,6 +1341,7 @@ function Card({
               </div>
             )}
           </div>
+          )}
         </div>
       </div>
     </div>
