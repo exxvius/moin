@@ -1085,7 +1085,10 @@
 /* General: primary stat tiles, a progress block, then a details list. */
 .tg-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
+  /* Always one row of the six stat tiles (Download, Upload, Ratio, Seeders,
+     Peers, ETA). minmax(0, 1fr) lets them shrink evenly instead of wrapping to a
+     second row when the panel is narrow. */
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: var(--space-3);
 }
 .tg-tile {
