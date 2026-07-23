@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import {
   ArrowDown,
@@ -97,7 +97,24 @@ export function TorrentDetail({ task, speed }: Props) {
     };
   }, [task.id]);
 
-  const files = details?.files ?? task.files ?? [];
+  // Build the file list from the task's own paths (the torrent's native layout,
+  // wrapping folder and all — same as the add-torrent modal's tree), and overlay
+  // the live per-file progress + selection from the polled detail by index. The
+  // backend reports paths relative to the output folder, which drops the wrapping
+  // folder when a subfolder layout is used — merging by index keeps the tree
+  // consistent between the two views. Fall back to the detail's own files only when
+  // the task has none yet (e.g. a magnet still resolving).
+  const files = useMemo(() => {
+    const base = task.files ?? [];
+    if (base.length === 0) return details?.files ?? [];
+    const live = details?.files;
+    if (!live) return base;
+    return base.map((f, i) => ({
+      ...f,
+      received: live[i]?.received ?? f.received,
+      selected: live[i]?.selected ?? f.selected,
+    }));
+  }, [task.files, details]);
 
   const applySelection = async (next: TorrentFile[]) => {
     if (details) setDetails({ ...details, files: next });

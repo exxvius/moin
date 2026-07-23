@@ -1297,6 +1297,14 @@ impl Inner {
                     if newly_started {
                         st.started = true;
                         st.last_tick = now;
+                        // Baseline the speed counters from this first reading. A resume
+                        // starts with `received` already at the bytes on disk, so without
+                        // this the first sample would be that whole amount "in one tick"
+                        // — a huge spike the smoothing then has to walk back down. Anchor
+                        // the byte + time marks here so the first real speed is a proper
+                        // delta from the next tick.
+                        st.last_bytes = received;
+                        st.last_emit = now;
                         entry.task.updated_at = now_ms();
                     } else {
                         // Active time only accrues while actually downloading.
