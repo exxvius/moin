@@ -167,6 +167,28 @@ export interface BackendInfo {
   available: boolean;
 }
 
+/** App identity from the backend. */
+export interface AppInfo {
+  name: string;
+  version: string;
+}
+
+/** Result of an update check against the project's GitHub releases. */
+export interface UpdateInfo {
+  /** The running version. */
+  current: string;
+  /** Latest published version (no leading "v"), or null if none was found. */
+  latest: string | null;
+  /** Whether `latest` is newer than `current`. */
+  available: boolean;
+  /** Release notes for the latest release, if any. */
+  notes: string | null;
+  /** Direct installer download for this platform, if attached to the release. */
+  asset_url: string | null;
+  /** The release page — the fallback place to get the update. */
+  page_url: string;
+}
+
 /** Which link in the resolve chain provided a managed tool's binary. */
 export type ToolSource = "override" | "env" | "managed" | "beside" | "path";
 

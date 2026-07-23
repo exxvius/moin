@@ -2,6 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AppInfo,
   BackendInfo,
   Category,
   Settings,
@@ -9,9 +10,11 @@ import type {
   ToolStatus,
   TorrentDetails,
   TorrentPreview,
+  UpdateInfo,
 } from "./types";
 
 export const api = {
+  appInfo: () => invoke<AppInfo>("app_info"),
   addDownload: (url: string, category?: string | null) =>
     invoke<Task>("add_download", { url, category: category ?? null }),
   prepareTorrent: (source: string) =>
@@ -69,4 +72,5 @@ export const api = {
     invoke<Category[]>("reorder_categories", { ids }),
   moveToCategory: (ids: string[], category: string | null) =>
     invoke<void>("move_to_category", { ids, category }),
+  checkUpdate: () => invoke<UpdateInfo>("check_update"),
 };

@@ -901,6 +901,70 @@
   min-height: 72px;
   padding: var(--space-5) var(--space-4) var(--space-4);
 }
+
+/* Tabs inside the combined settings card (General / HTTP / Torrent). Mirrors the
+   torrent-detail tabs, three across, with a margin below before the rows start. */
+.settings-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-bottom: 1px solid
+    color-mix(in oklab, var(--glass-border) 75%, transparent);
+  margin: 0 calc(-1 * var(--space-5)) var(--space-4);
+}
+.settings-tab {
+  position: relative;
+  padding: var(--space-3) var(--space-2);
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-size: var(--text-base);
+  font-weight: 550;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease),
+    background var(--duration-fast) var(--ease);
+}
+.settings-tab:hover {
+  color: var(--text);
+  background: color-mix(in oklab, var(--text) 4%, transparent);
+}
+.settings-tab.active {
+  color: var(--text);
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--accent) 8%, transparent),
+    transparent
+  );
+}
+.settings-tab.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 10px color-mix(in oklab, var(--accent) 75%, transparent);
+}
+
+/* Release notes shown under an available update — preformatted, scrollable, dim. */
+.update-notes {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3);
+  max-height: 220px;
+  overflow-y: auto;
+  border-radius: var(--radius-2);
+  background: color-mix(in oklab, var(--text) 4%, transparent);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.update-error {
+  color: var(--bad, #e5484d);
+}
 .td-empty {
   padding: var(--space-6) 0;
   font-size: var(--text-sm);

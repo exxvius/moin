@@ -1,12 +1,16 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Select } from "../components/Select";
 import { Switch } from "../components/Switch";
 import { api } from "../lib/api";
 import { subscribeToolProgress } from "../lib/events";
 import { formatBytes } from "../lib/format";
 import { ACCENTS, type Accent } from "../lib/accent";
-import type { BackendInfo, Settings, ToolStatus } from "../lib/types";
+import type { BackendInfo, Settings, ToolStatus, UpdateInfo } from "../lib/types";
+
+/** The project's public repo — the About card links here and updates come from it. */
+const REPO_URL = "https://github.com/exxvius/moin";
 
 interface Props {
   accent: Accent;
@@ -38,6 +42,15 @@ const SEED_TIME_OPTIONS = [0, 30, 60, 120, 360, 720, 1440];
 const RATE_LIMIT_OPTIONS = [0, 64, 128, 256, 512, 1024, 2048, 5120, 10240, 20480].map(
   (kib) => kib * 1024,
 );
+
+// The tabs of the combined settings card: General (behavior + advanced), HTTP
+// (direct-download tuning), Torrent (torrent tuning).
+type SettingsTab = "general" | "http" | "torrent";
+const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
+  { id: "general", label: "General" },
+  { id: "http", label: "HTTP" },
+  { id: "torrent", label: "Torrent" },
+];
 
 /** "30 minutes" / "6 hours" / "1 day" for a whole number of minutes. */
 function minutesLabel(n: number): string {
@@ -80,6 +93,8 @@ export function SettingsView({
   // Same, for the torrent listen port.
   const [torrentPortDraft, setTorrentPortDraft] = useState("");
   const [tokenCopied, setTokenCopied] = useState(false);
+  // Which tab of the combined General/HTTP/Torrent settings card is showing.
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
 
   useEffect(() => {
     api.getSettings().then(setSettings).catch(() => {});
@@ -216,8 +231,141 @@ export function SettingsView({
       </div>
 
       <div className="card">
-        <div className="card-title">Downloads</div>
+        <div className="card-title">Appearance</div>
 
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Accent color</div>
+            <div className="dim">
+              Recolors backgrounds, buttons, and progress. Light and dark is in
+              the sidebar.
+            </div>
+          </div>
+          <Select
+            value={accent}
+            ariaLabel="Accent color"
+            caret
+            onChange={(v) => setAccent(v as Accent)}
+            options={ACCENTS.map((a) => ({
+              value: a.id,
+              label: (
+                <span className="accent-option">
+                  <span
+                    className="accent-dot"
+                    style={{ background: a.swatch }}
+                  />
+                  {a.label}
+                </span>
+              ),
+            }))}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Reorder animation</div>
+            <div className="dim">
+              Slide rows into place when the sort order changes. Turn off if
+              live-sorted downloads shuffle too much.
+            </div>
+          </div>
+          <Switch
+            checked={reorderAnim}
+            ariaLabel="Reorder animation"
+            onChange={setReorderAnim}
+          />
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="settings-tabs" role="tablist">
+          {SETTINGS_TABS.map(({ id, label }) => (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={settingsTab === id}
+              className={`settings-tab${settingsTab === id ? " active" : ""}`}
+              onClick={() => setSettingsTab(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {settingsTab === "general" && (
+          <>
+            <div className="setting-row">
+              <div>
+                <div className="setting-label">Changing a download's category</div>
+                <div className="dim">
+                  What happens when you move a download to another category. Move
+                  the file and moin relocates it into that category's folder,
+                  showing a Moving status until it lands, then resumes or marks it
+                  done.
+                </div>
+              </div>
+              <Select
+                value={settings?.category_change ?? "change-only"}
+                ariaLabel="Category change behavior"
+                caret
+                disabled={!settings}
+                onChange={(v) =>
+                  patch({ category_change: v as Settings["category_change"] })
+                }
+                options={[
+                  { value: "change-only", label: "Just change the category" },
+                  { value: "move-file", label: "Move file to category folder" },
+                ]}
+              />
+            </div>
+
+            <div className="setting-row">
+              <div>
+                <div className="setting-label">Stall timeout</div>
+                <div className="dim">
+                  How long a download may go without receiving any data before
+                  it's marked Stalled. A stalled download keeps its progress —
+                  retry it from the right-click menu. Set to Never to keep waiting.
+                </div>
+              </div>
+              <Select
+                value={String(settings?.stall_timeout_secs ?? 60)}
+                ariaLabel="Stall timeout"
+                caret
+                disabled={!settings}
+                onChange={(v) => patch({ stall_timeout_secs: Number(v) })}
+                options={STALL_OPTIONS.map((n) => ({
+                  value: String(n),
+                  label: n === 0 ? "Never" : secondsLabel(n),
+                }))}
+              />
+            </div>
+
+            <div className="setting-row">
+              <div>
+                <div className="setting-label">Connection timeout</div>
+                <div className="dim">
+                  How long to wait to reach a server before giving up on the
+                  connection. Applies to the built-in engine.
+                </div>
+              </div>
+              <Select
+                value={String(settings?.connect_timeout_secs ?? 30)}
+                ariaLabel="Connection timeout"
+                caret
+                disabled={!settings}
+                onChange={(v) => patch({ connect_timeout_secs: Number(v) })}
+                options={CONNECT_OPTIONS.map((n) => ({
+                  value: String(n),
+                  label: n === 0 ? "No limit" : secondsLabel(n),
+                }))}
+              />
+            </div>
+          </>
+        )}
+
+        {settingsTab === "http" && (
+          <>
         <div className="setting-row">
           <div>
             <div className="setting-label">Download engine</div>
@@ -321,86 +469,11 @@ export function SettingsView({
             onChange={(v) => patch({ hide_part_files: v })}
           />
         </div>
-      </div>
+          </>
+        )}
 
-      <div className="card">
-        <div className="card-title">Behavior</div>
-
-        <div className="setting-row">
-          <div>
-            <div className="setting-label">Changing a download's category</div>
-            <div className="dim">
-              What happens when you move a download to another category. Move the
-              file and moin relocates it into that category's folder, showing a
-              Moving status until it lands, then resumes or marks it done.
-            </div>
-          </div>
-          <Select
-            value={settings?.category_change ?? "change-only"}
-            ariaLabel="Category change behavior"
-            caret
-            disabled={!settings}
-            onChange={(v) =>
-              patch({ category_change: v as Settings["category_change"] })
-            }
-            options={[
-              { value: "change-only", label: "Just change the category" },
-              { value: "move-file", label: "Move file to category folder" },
-            ]}
-          />
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="card-title">Advanced</div>
-
-        <div className="setting-row">
-          <div>
-            <div className="setting-label">Stall timeout</div>
-            <div className="dim">
-              How long a download may go without receiving any data before it's
-              marked Stalled. A stalled download keeps its progress — retry it
-              from the right-click menu. Set to Never to keep waiting.
-            </div>
-          </div>
-          <Select
-            value={String(settings?.stall_timeout_secs ?? 60)}
-            ariaLabel="Stall timeout"
-            caret
-            disabled={!settings}
-            onChange={(v) => patch({ stall_timeout_secs: Number(v) })}
-            options={STALL_OPTIONS.map((n) => ({
-              value: String(n),
-              label: n === 0 ? "Never" : secondsLabel(n),
-            }))}
-          />
-        </div>
-
-        <div className="setting-row">
-          <div>
-            <div className="setting-label">Connection timeout</div>
-            <div className="dim">
-              How long to wait to reach a server before giving up on the
-              connection. Applies to the built-in engine.
-            </div>
-          </div>
-          <Select
-            value={String(settings?.connect_timeout_secs ?? 30)}
-            ariaLabel="Connection timeout"
-            caret
-            disabled={!settings}
-            onChange={(v) => patch({ connect_timeout_secs: Number(v) })}
-            options={CONNECT_OPTIONS.map((n) => ({
-              value: String(n),
-              label: n === 0 ? "No limit" : secondsLabel(n),
-            }))}
-          />
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="card-title">Torrents</div>
-
+        {settingsTab === "torrent" && (
+          <>
         <div className="setting-row">
           <div>
             <div className="setting-label">Torrent engine</div>
@@ -565,52 +638,8 @@ export function SettingsView({
             }))}
           />
         </div>
-      </div>
-
-      <div className="card">
-        <div className="card-title">External tools</div>
-        <p className="dim">
-          Optional binaries moin can use in place of its built-in engines. Set one
-          up here, then pick it as an engine where it applies.
-        </p>
-
-        <div className="tool-row">
-          <div>
-            <div className="setting-label">aria2c</div>
-            <ToolState tool={tool} fetching={fetching} error={toolError} />
-          </div>
-          <div className="tool-actions">
-            {tool?.can_fetch && (
-              <button
-                className="dl-btn"
-                onClick={downloadTool}
-                disabled={fetching !== null}
-              >
-                {fetching
-                  ? "Downloading…"
-                  : tool?.source === "managed"
-                    ? "Re-download"
-                    : "Download"}
-              </button>
-            )}
-            <button
-              className="dl-btn"
-              onClick={pickBinary}
-              disabled={fetching !== null}
-            >
-              Use my binary…
-            </button>
-            {tool?.source === "override" && (
-              <button
-                className="dl-btn danger"
-                onClick={clearBinary}
-                disabled={fetching !== null}
-              >
-                Clear
-              </button>
-            )}
-          </div>
-        </div>
+          </>
+        )}
       </div>
 
       <div className="card">
@@ -693,51 +722,52 @@ export function SettingsView({
       </div>
 
       <div className="card">
-        <div className="card-title">Appearance</div>
+        <div className="card-title">External tools</div>
+        <p className="dim">
+          Optional binaries moin can use in place of its built-in engines. Set one
+          up here, then pick it as an engine where it applies.
+        </p>
 
-        <div className="setting-row">
+        <div className="tool-row">
           <div>
-            <div className="setting-label">Accent color</div>
-            <div className="dim">
-              Recolors backgrounds, buttons, and progress. Light and dark is in
-              the sidebar.
-            </div>
+            <div className="setting-label">aria2c</div>
+            <ToolState tool={tool} fetching={fetching} error={toolError} />
           </div>
-          <Select
-            value={accent}
-            ariaLabel="Accent color"
-            caret
-            onChange={(v) => setAccent(v as Accent)}
-            options={ACCENTS.map((a) => ({
-              value: a.id,
-              label: (
-                <span className="accent-option">
-                  <span
-                    className="accent-dot"
-                    style={{ background: a.swatch }}
-                  />
-                  {a.label}
-                </span>
-              ),
-            }))}
-          />
-        </div>
-
-        <div className="setting-row">
-          <div>
-            <div className="setting-label">Reorder animation</div>
-            <div className="dim">
-              Slide rows into place when the sort order changes. Turn off if
-              live-sorted downloads shuffle too much.
-            </div>
+          <div className="tool-actions">
+            {tool?.can_fetch && (
+              <button
+                className="dl-btn"
+                onClick={downloadTool}
+                disabled={fetching !== null}
+              >
+                {fetching
+                  ? "Downloading…"
+                  : tool?.source === "managed"
+                    ? "Re-download"
+                    : "Download"}
+              </button>
+            )}
+            <button
+              className="dl-btn"
+              onClick={pickBinary}
+              disabled={fetching !== null}
+            >
+              Use my binary…
+            </button>
+            {tool?.source === "override" && (
+              <button
+                className="dl-btn danger"
+                onClick={clearBinary}
+                disabled={fetching !== null}
+              >
+                Clear
+              </button>
+            )}
           </div>
-          <Switch
-            checked={reorderAnim}
-            ariaLabel="Reorder animation"
-            onChange={setReorderAnim}
-          />
         </div>
       </div>
+
+      <AboutCard />
     </div>
   );
 }
@@ -802,4 +832,85 @@ function sourceLabel(tool: ToolStatus): string {
     default:
       return tool.path ?? "";
   }
+}
+
+/** The About + Update card: shows the running version and checks GitHub for a newer
+ *  release on demand. "Get the update" opens the installer (or the release page) —
+ *  a running app can't overwrite itself, so the actual swap is the installer's job. */
+function AboutCard() {
+  const [version, setVersion] = useState("");
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .appInfo()
+      .then((i) => setVersion(i.version))
+      .catch(() => {});
+  }, []);
+
+  const check = async () => {
+    setChecking(true);
+    setError(null);
+    try {
+      setUpdate(await api.checkUpdate());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const open = (url: string) => openUrl(url).catch(() => {});
+
+  const status = error
+    ? error
+    : !update
+      ? "Check GitHub for a newer version."
+      : update.available
+        ? `Version ${update.latest} is available.`
+        : "You're on the latest version.";
+
+  return (
+    <div className="card">
+      <div className="card-title">About</div>
+
+      <div className="setting-row">
+        <div>
+          <div className="setting-label">moin{version ? ` ${version}` : ""}</div>
+          <div className="dim">
+            A one-stop download manager for direct links, torrents, and media
+            sites.
+          </div>
+        </div>
+        <button className="dl-btn" onClick={() => open(REPO_URL)}>
+          View on GitHub
+        </button>
+      </div>
+
+      <div className="setting-row">
+        <div>
+          <div className="setting-label">Updates</div>
+          <div className={`dim${error ? " update-error" : ""}`}>{status}</div>
+        </div>
+        {update?.available ? (
+          <button
+            className="dl-btn"
+            onClick={() => open(update.asset_url ?? update.page_url)}
+          >
+            Get the update
+          </button>
+        ) : (
+          <button className="dl-btn" onClick={check} disabled={checking}>
+            {checking ? "Checking…" : "Check for updates"}
+          </button>
+        )}
+      </div>
+
+      {update?.available && update.notes && (
+        <pre className="update-notes">{update.notes}</pre>
+      )}
+    </div>
+  );
 }

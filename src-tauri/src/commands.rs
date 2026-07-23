@@ -33,6 +33,12 @@ pub fn app_info() -> AppInfo {
     }
 }
 
+/// Check GitHub for a newer release, for the settings About/Update card.
+#[tauri::command]
+pub async fn check_update() -> Result<crate::core::update::UpdateInfo, String> {
+    crate::core::update::check(env!("CARGO_PKG_VERSION")).await
+}
+
 /// The folder new downloads land in: the user's override, else the OS Downloads.
 fn download_dir(app: &AppHandle, state: &AppState) -> PathBuf {
     if let Some(dir) = state.engine.settings().download_dir {
