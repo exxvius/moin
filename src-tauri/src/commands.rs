@@ -94,7 +94,7 @@ pub async fn add_torrent(
 ) -> Result<Task, String> {
     state
         .engine
-        .add_torrent(source, dir.into(), category, selected, folder, renames)
+        .add_torrent(source, dir.into(), category, selected, folder, renames, false)
 }
 
 /// Live detail (files, peers, trackers) for a torrent, polled by its expanded

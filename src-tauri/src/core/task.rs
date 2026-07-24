@@ -214,6 +214,13 @@ pub struct Task {
     /// Id of the category this download is filed under, or `None` if uncategorized.
     #[serde(default)]
     pub category: Option<String>,
+    /// A pending post-completion relocation. Set when this download stages into a
+    /// category's incomplete folder: `dest` points inside that folder while the
+    /// transfer runs, and on completion the finished content is moved into this
+    /// folder (the category's real save folder), after which the field clears.
+    /// `None` means the download already lives in its final folder.
+    #[serde(default)]
+    pub final_dir: Option<String>,
     /// Extra HTTP request headers to send with this download — Cookie, Referer,
     /// User-Agent and friends, captured by the browser extension so an auth-gated
     /// link downloads the same way the browser would. Persisted, so a resume after
@@ -256,6 +263,12 @@ pub struct Task {
     /// other downloads) — we only ever delete our own files there, never the folder.
     #[serde(default)]
     pub own_dir: bool,
+    /// Suppress the category's `.torrent`-file export for this torrent. Set on a
+    /// torrent produced by converting a captured `.torrent` download: that source
+    /// file is deliberately consumed and left no trace (no archive, no saved copy),
+    /// so the converted torrent must not re-save a `.torrent` either.
+    #[serde(default)]
+    pub skip_torrent_export: bool,
     /// Transient: the user chose to keep seeding this torrent past the ratio/time
     /// limit ("Start seeding" on a finished torrent). Read when the run starts to
     /// disable the auto-stop for that session. Not persisted (seeding doesn't

@@ -233,17 +233,28 @@ impl Engine {
         }
 
         // Resolve the category: keep only an id that still exists, and honor its
-        // save-folder override for the destination.
-        let (category, dir) = {
+        // save-folder override plus any incomplete-staging folder.
+        let (category, save_dir, incomplete) = {
             let cats = self.inner.categories.lock().unwrap();
             match category.and_then(|id| cats.iter().find(|c| c.id == id)) {
                 Some(c) => {
-                    let dir = c.save_dir.clone().map(PathBuf::from).unwrap_or(dir);
-                    (Some(c.id.clone()), dir)
+                    let save = c.save_dir.clone().map(PathBuf::from).unwrap_or(dir);
+                    let inc = c
+                        .incomplete_dir
+                        .clone()
+                        .filter(|d| !d.trim().is_empty())
+                        .map(PathBuf::from);
+                    (Some(c.id.clone()), save, inc)
                 }
-                None => (None, dir),
+                None => (None, dir, None),
             }
         };
+        // Download into the incomplete folder when one is set, then move the
+        // finished file into the save folder on completion (`final_dir`).
+        let dir = incomplete.clone().unwrap_or_else(|| save_dir.clone());
+        let final_dir = incomplete
+            .as_ref()
+            .map(|_| save_dir.to_string_lossy().into_owned());
 
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         // A caller-supplied name (e.g. from a browser capture) wins when it's
@@ -278,6 +289,7 @@ impl Engine {
                 active_ms: 0,
                 backend: None,
                 category,
+                final_dir,
                 headers,
                 info_hash: None,
                 torrent_source: None,
@@ -288,6 +300,7 @@ impl Engine {
                 peers: 0,
                 up_speed: 0,
                 own_dir: false,
+                skip_torrent_export: false,
                 force_seed: false,
                 force_start: false,
             };
@@ -476,6 +489,10 @@ impl Engine {
     /// file selection (indices to include; empty = all). `dir` is the output
     /// *folder* — librqbit manages its own partials + fastresume inside it. The
     /// file list is read from the `.torrent` cached during [`Self::prepare_torrent`].
+    /// `skip_torrent_export` suppresses the category's `.torrent`-file export for
+    /// this add — set when converting a captured `.torrent`, which must leave no
+    /// saved copy behind.
+    #[allow(clippy::too_many_arguments)] // cohesive add-torrent inputs; a struct would only shuffle them
     pub fn add_torrent(
         &self,
         source: String,
@@ -484,6 +501,7 @@ impl Engine {
         selected: Vec<usize>,
         folder: Option<String>,
         renames: Vec<String>,
+        skip_torrent_export: bool,
     ) -> Result<Task, String> {
         let source = source.trim().to_string();
         let meta = parse_meta(&source)?;
@@ -511,21 +529,35 @@ impl Engine {
             .or_else(|| meta.info_hash.clone())
             .unwrap_or_else(|| "torrent".to_string());
 
+        // Resolve the category record up front: it validates the id and carries the
+        // automation (exclude rules below), the incomplete-staging folder, and the
+        // `.torrent`-export folders. `None` = uncategorized.
+        let cat = {
+            let cats = self.inner.categories.lock().unwrap();
+            category.and_then(|id| cats.iter().find(|c| c.id == id).cloned())
+        };
+
         // Content layout: `Some(name)` nests the files under that folder (its name
         // may have been renamed in the modal); `None` saves them directly in the
         // chosen folder. `dest` is the actual output folder either way, so the file
         // paths (`dest`/`file.path`) stay correct for progress + deletion.
         let own_dir = folder.is_some();
+        // The caller's `dir` is the final save folder. When the category stages
+        // in-progress data in an incomplete folder, download there and move into the
+        // save folder on completion (`final_dir`); otherwise download in place.
+        let save_parent = dir;
+        let incomplete = cat
+            .as_ref()
+            .and_then(|c| c.incomplete_dir.clone())
+            .filter(|d| !d.trim().is_empty())
+            .map(PathBuf::from);
+        let work_base = incomplete.clone().unwrap_or_else(|| save_parent.clone());
+        let final_dir = incomplete
+            .as_ref()
+            .map(|_| save_parent.to_string_lossy().into_owned());
         let dir = match folder.as_deref().and_then(sanitize_filename) {
-            Some(name) => dir.join(name),
-            None => dir,
-        };
-
-        // Resolve the category record up front, both to validate its id and to read
-        // its automation (the exclude rules below). `None` = uncategorized.
-        let cat = {
-            let cats = self.inner.categories.lock().unwrap();
-            category.and_then(|id| cats.iter().find(|c| c.id == id).cloned())
+            Some(name) => work_base.join(name),
+            None => work_base,
         };
 
         // Load the file list from the cached .torrent. Selection: an explicit list
@@ -579,6 +611,22 @@ impl Engine {
         let total: u64 = files.iter().filter(|f| f.selected).map(|f| f.size).sum();
         let total = (total > 0).then_some(total);
 
+        // `.torrent`-export folder (torrent sources only): drop a copy of the
+        // metadata file now if the category asks for one. The finished torrent may
+        // move it to a separate "done" folder later (see `export_torrent_on_complete`).
+        // A converted capture skips this entirely — its source `.torrent` was
+        // consumed and must leave no saved copy.
+        if !skip_torrent_export {
+            if let (Some(dir), Some(bytes)) = (
+                cat.as_ref()
+                    .and_then(|c| c.torrent_file_dir.clone())
+                    .filter(|d| !d.trim().is_empty()),
+                cached_bytes.as_deref(),
+            ) {
+                export_torrent_file(&dir, &display, bytes);
+            }
+        }
+
         // The folder is the caller's explicit choice (the modal pre-filled it from
         // the category's folder but let the user override), so use it as-is.
         let category = cat.map(|c| c.id);
@@ -606,6 +654,7 @@ impl Engine {
                 active_ms: 0,
                 backend: None,
                 category,
+                final_dir,
                 headers: BTreeMap::new(),
                 info_hash: meta.info_hash,
                 torrent_source: Some(meta.source),
@@ -616,6 +665,7 @@ impl Engine {
                 peers: 0,
                 up_speed: 0,
                 own_dir,
+                skip_torrent_export,
                 force_seed: false,
                 force_start: false,
             };
@@ -1353,6 +1403,11 @@ impl Engine {
         let behavior = self.inner.settings.lock().unwrap().category_change;
 
         for id in ids {
+            // A manual category change cancels any pending incomplete→save
+            // relocation — the user is filing this download explicitly now.
+            if let Some(entry) = self.inner.tasks.lock().unwrap().get_mut(&id) {
+                entry.task.final_dir = None;
+            }
             if behavior == CategoryChangeBehavior::ChangeOnly {
                 self.retag(&id, category.clone());
                 continue;
@@ -1472,7 +1527,15 @@ impl Engine {
                 .unwrap_or_else(|| default_dir.to_path_buf());
             let folder = category::layout_folder(cat, &name, resolved.files.len());
             let renames = category::plan_renames(cat, &resolved.files);
-            self.add_torrent(source, dir, Some(cat.id.clone()), Vec::new(), folder, renames)
+            self.add_torrent(
+                source,
+                dir,
+                Some(cat.id.clone()),
+                Vec::new(),
+                folder,
+                renames,
+                false,
+            )
         } else if cat.fallback_download {
             // Doesn't match the category's triggers, but the category opts to grab
             // non-matching drops anyway — uncategorized, no automation.
@@ -1483,6 +1546,7 @@ impl Engine {
                 Vec::new(),
                 None,
                 Vec::new(),
+                false,
             )
         } else {
             mark_processed(path, "skipped");
@@ -1545,24 +1609,20 @@ impl Engine {
             None => (None, Vec::new()),
         };
 
-        match self.add_torrent(source, dir, category, Vec::new(), folder, renames) {
+        // `skip_torrent_export = true`: the converted torrent must not re-save a
+        // `.torrent` — the captured source is consumed and leaves no trace.
+        match self.add_torrent(source, dir, category, Vec::new(), folder, renames, true) {
             // The .torrent was only a vehicle: delete the spent file and drop the
             // HTTP record for good — it's never archived or counted, so it neither
-            // shows in the Archive nor skews stats.
+            // shows in the Archive nor skews stats, and no `.torrent` is left behind
+            // (in the incomplete folder or anywhere else).
             Ok(_) => {
-                let task = {
-                    let tasks = self.inner.tasks.lock().unwrap();
-                    tasks.get(&id).map(|e| e.task.clone())
-                };
-                if let Some(task) = task {
-                    // Off the async executor — the delete verifies + retries with sleeps.
-                    if let Err(e) = tokio::task::spawn_blocking(move || delete_torrent_files(&task))
-                        .await
-                        .unwrap_or_else(|e| Err(e.to_string()))
-                    {
-                        // A stray .torrent left on disk is harmless; forget the record anyway.
-                        tracing::warn!(id = %id, error = %e, "convert: couldn't delete the spent .torrent");
-                    }
+                if let Some(task) = self.inner.tasks.lock().unwrap().get(&id).map(|e| e.task.clone())
+                {
+                    // A captured `.torrent` is a plain HTTP download — its `dest` is the
+                    // file itself, so purge it as a single file (`delete_torrent_files`
+                    // only removes torrent folders/`files`, and would no-op here).
+                    purge_files(&task, true);
                 }
                 self.forget(&id);
             }
@@ -1637,26 +1697,31 @@ impl Inner {
             .count()
     }
 
+    /// Whether a just-settled task will be converted from a `.torrent` download
+    /// into a real torrent: a completed HTTP `.torrent` filed into a capture-enabled
+    /// category. The convert path then drops the HTTP record, so the other
+    /// completion hooks skip a task that's about to disappear.
+    fn will_convert(inner: &Arc<Inner>, task: &Task) -> bool {
+        if task.kind != TaskKind::Http
+            || task.status != TaskStatus::Completed
+            || !is_dot_torrent(&task.dest)
+        {
+            return false;
+        }
+        let Some(cat_id) = task.category.as_ref() else {
+            return false;
+        };
+        let cats = inner.categories.lock().unwrap();
+        cats.iter()
+            .any(|c| &c.id == cat_id && c.capture_torrent_downloads)
+    }
+
     /// If `task` is a finished `.torrent` download filed into a category that opts
     /// to capture torrent downloads, kick off its conversion into a real torrent on
     /// the runtime. A no-op for anything else, so it's cheap to call on every
     /// settle. Spawns because the conversion resolves metadata asynchronously.
     fn maybe_convert_download(inner: &Arc<Inner>, task: &Task) {
-        if task.kind != TaskKind::Http
-            || task.status != TaskStatus::Completed
-            || !is_dot_torrent(&task.dest)
-        {
-            return;
-        }
-        let Some(cat_id) = task.category.clone() else {
-            return;
-        };
-        let enabled = {
-            let cats = inner.categories.lock().unwrap();
-            cats.iter()
-                .any(|c| c.id == cat_id && c.capture_torrent_downloads)
-        };
-        if !enabled {
+        if !Inner::will_convert(inner, task) {
             return;
         }
         let engine = Engine {
@@ -1664,6 +1729,72 @@ impl Inner {
         };
         let id = task.id.clone();
         tokio::spawn(async move { engine.convert_download(id).await });
+    }
+
+    /// When a torrent finishes, move its saved `.torrent` copy into the category's
+    /// "done" folder — a separate home for completed torrents. When no copy was
+    /// saved on add (only a done folder is set, or the copy is gone), export a fresh
+    /// one straight to the done folder from the cached metadata. A no-op for
+    /// non-torrents and for categories without a done folder.
+    fn export_torrent_on_complete(inner: &Arc<Inner>, task: &Task) {
+        if !task.is_torrent() || task.skip_torrent_export {
+            return;
+        }
+        let Some(cat_id) = task.category.clone() else {
+            return;
+        };
+        let (src_dir, done_dir) = {
+            let cats = inner.categories.lock().unwrap();
+            let Some(c) = cats.iter().find(|c| c.id == cat_id) else {
+                return;
+            };
+            let clean = |o: &Option<String>| o.clone().filter(|d| !d.trim().is_empty());
+            (clean(&c.torrent_file_dir), clean(&c.torrent_file_done_dir))
+        };
+        // No separate done folder: the copy (if any) stays where it was written.
+        let Some(done_dir) = done_dir else {
+            return;
+        };
+        let base = sanitize_filename(&task.filename).unwrap_or_else(|| "torrent".to_string());
+        let file = format!("{base}.torrent");
+        // Prefer moving the copy saved on add; fall back to a fresh export from the
+        // cached `.torrent` (idempotent — a second completion finds it already moved).
+        let moved = src_dir
+            .as_deref()
+            .map(|dir| move_file_into(&Path::new(dir).join(&file), &done_dir, &file))
+            .unwrap_or(false);
+        if !moved {
+            if let Some(hash) = &task.info_hash {
+                if let Ok(bytes) = std::fs::read(torrent::meta_path(&inner.data_dir, hash)) {
+                    export_torrent_file(&done_dir, &task.filename, &bytes);
+                }
+            }
+        }
+    }
+
+    /// Move a just-completed download out of its incomplete-staging folder into the
+    /// final save folder recorded in `final_dir`, then clear the marker. A no-op
+    /// when the task never staged (`final_dir` is `None`). Reuses the category-move
+    /// machinery, so a completed torrent re-adds and seeds from the new location.
+    fn relocate_to_final(inner: &Arc<Inner>, task: &Task) {
+        let Some(final_dir) = task.final_dir.clone() else {
+            return;
+        };
+        // Clear the marker before the move: a torrent relocation re-queues and
+        // completes again, and the marker must be gone by then or it would loop.
+        {
+            let mut tasks = inner.tasks.lock().unwrap();
+            let Some(entry) = tasks.get_mut(&task.id) else {
+                return;
+            };
+            entry.task.final_dir = None;
+        }
+        Inner::begin_move(
+            inner.clone(),
+            task.id.clone(),
+            task.category.clone(),
+            PathBuf::from(final_dir),
+        );
     }
 
     /// Start queued tasks until the concurrency limit is reached. A limit of 0
@@ -1761,17 +1892,29 @@ impl Inner {
             return;
         };
 
+        // The task's category can override the seed limits; each axis falls back to
+        // the global setting when the category leaves it unset (`None` = inherit).
+        let (cat_ratio, cat_time_mins) = task
+            .category
+            .as_ref()
+            .and_then(|id| {
+                let cats = inner.categories.lock().unwrap();
+                cats.iter()
+                    .find(|c| &c.id == id)
+                    .map(|c| (c.seed_ratio_limit, c.seed_time_limit_mins))
+            })
+            .unwrap_or((None, None));
         let opts = {
             let s = inner.settings.lock().unwrap();
             // A force-seed run (the user chose to keep seeding past the limit)
-            // ignores the auto-stop; a normal run honors the configured limits.
+            // ignores the auto-stop; a normal run honors the effective limits
+            // (category override, else the global default).
             let (seed_ratio_limit, seed_time_limit) = if task.force_seed {
                 (0.0, Duration::ZERO)
             } else {
-                (
-                    s.seed_ratio_limit,
-                    Duration::from_secs(s.seed_time_limit_mins.saturating_mul(60)),
-                )
+                let ratio = cat_ratio.unwrap_or(s.seed_ratio_limit);
+                let mins = cat_time_mins.unwrap_or(s.seed_time_limit_mins);
+                (ratio, Duration::from_secs(mins.saturating_mul(60)))
             };
             TransferOpts {
                 connections: s.connections,
@@ -1948,6 +2091,27 @@ impl Inner {
                     inner.emitter.updated(&task);
                 }
                 if newly_seeding {
+                    // A torrent staged in an incomplete folder relocates to its save
+                    // folder the moment it finishes downloading — before/independent of
+                    // seeding — then re-adds to seed from there (like qBittorrent).
+                    // Pausing the live run hands the move to `finish` (a pending move),
+                    // which detaches, moves the files, and re-queues at the new home.
+                    // Done at the download→seed edge, not at terminal Completed, so a
+                    // seed-forever torrent (which never settles) still gets moved.
+                    if task.is_torrent() && task.final_dir.is_some() {
+                        let mut tasks = inner.tasks.lock().unwrap();
+                        if let Some(entry) = tasks.get_mut(&id) {
+                            if let Some(final_dir) = entry.task.final_dir.take() {
+                                entry.pending_move = Some(PendingMove {
+                                    category: entry.task.category.clone(),
+                                    target_dir: PathBuf::from(final_dir),
+                                });
+                                if let Some(control) = &entry.control {
+                                    control.set(Signal::Pause);
+                                }
+                            }
+                        }
+                    }
                     // Freed a download slot + it's a meaningful status change — push
                     // a full update and let the next queued download start.
                     inner.emitter.updated(&task);
@@ -2149,9 +2313,18 @@ impl Inner {
                 }
                 let _ = inner.store.lock().unwrap().upsert(&task);
                 inner.emitter.updated(&task);
-                // A completed `.torrent` download in a capture-enabled category is
-                // re-added as a torrent (then this HTTP record is dropped entirely).
-                Inner::maybe_convert_download(&inner, &task);
+                if Inner::will_convert(&inner, &task) {
+                    // A completed `.torrent` download in a capture-enabled category
+                    // is re-added as a torrent (then this HTTP record is dropped
+                    // entirely), so its own completion hooks don't apply.
+                    Inner::maybe_convert_download(&inner, &task);
+                } else if task.status == TaskStatus::Completed {
+                    // Export the finished torrent's `.torrent` to its done folder,
+                    // then move the content out of any incomplete-staging folder into
+                    // the save folder. Both no-op unless the category configured them.
+                    Inner::export_torrent_on_complete(&inner, &task);
+                    Inner::relocate_to_final(&inner, &task);
+                }
                 Inner::pump(inner);
             }
         }
@@ -2510,6 +2683,43 @@ fn is_dot_torrent(dest: &str) -> bool {
     Path::new(dest)
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("torrent"))
+}
+
+/// Write `.torrent` bytes into `dir` as `<sanitized name>.torrent`, creating the
+/// folder if needed. Best-effort: a failure is logged, never fatal to the add.
+fn export_torrent_file(dir: &str, name: &str, bytes: &[u8]) {
+    let base = sanitize_filename(name).unwrap_or_else(|| "torrent".to_string());
+    let dir = Path::new(dir);
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        tracing::warn!(dir = %dir.display(), error = %e, "couldn't create the .torrent export folder");
+        return;
+    }
+    let path = dir.join(format!("{base}.torrent"));
+    if let Err(e) = std::fs::write(&path, bytes) {
+        tracing::warn!(path = %path.display(), error = %e, "couldn't export the .torrent file");
+    }
+}
+
+/// Move `from` into `dir` as `name`, renaming when possible and falling back to
+/// copy+remove across drives. Returns whether the file actually moved (false when
+/// the source is missing or the move failed), so the caller can export a fresh copy.
+fn move_file_into(from: &Path, dir: &str, name: &str) -> bool {
+    if !from.exists() {
+        return false;
+    }
+    let dir = Path::new(dir);
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let to = dir.join(name);
+    if std::fs::rename(from, &to).is_ok() {
+        return true;
+    }
+    if std::fs::copy(from, &to).is_ok() {
+        let _ = std::fs::remove_file(from);
+        return true;
+    }
+    false
 }
 
 /// Whether `path` is a `.torrent` file the watch poller hasn't handled yet. A

@@ -77,6 +77,30 @@ pub struct Category {
     /// Optional destination override; `None` means the default download dir.
     #[serde(default)]
     pub save_dir: Option<String>,
+    /// Seed-limit override for torrents filed here. `None` inherits the global
+    /// seed ratio limit; `Some(0.0)` seeds forever (no ratio cap); `Some(r)` stops
+    /// seeding once the ratio reaches `r`.
+    #[serde(default)]
+    pub seed_ratio_limit: Option<f64>,
+    /// Seed-time override, in minutes. `None` inherits the global limit; `Some(0)`
+    /// means no time cap; `Some(m)` stops seeding `m` minutes after completion.
+    #[serde(default)]
+    pub seed_time_limit_mins: Option<u64>,
+    /// Optional staging folder for in-progress downloads (torrent and HTTP). While
+    /// downloading, the data lives here; on completion the finished content moves
+    /// into `save_dir` (or the default folder). `None`/empty downloads straight
+    /// into the final folder.
+    #[serde(default)]
+    pub incomplete_dir: Option<String>,
+    /// Save a copy of each added torrent's `.torrent` file into this folder.
+    /// `None`/empty keeps no copy. Torrent sources only.
+    #[serde(default)]
+    pub torrent_file_dir: Option<String>,
+    /// When a torrent finishes, move its saved `.torrent` copy here — a separate
+    /// home for completed torrents. `None`/empty leaves it in `torrent_file_dir`
+    /// (or, if that's unset, exports a copy here on completion only).
+    #[serde(default)]
+    pub torrent_file_done_dir: Option<String>,
     /// Which add-methods this category accepts. Empty means any source.
     #[serde(default)]
     pub sources: Vec<AddMethodKind>,
@@ -578,6 +602,11 @@ pub fn defaults() -> Vec<Category> {
         icon: Some(icon.to_string()),
         hidden_from_all: false,
         save_dir: None,
+        seed_ratio_limit: None,
+        seed_time_limit_mins: None,
+        incomplete_dir: None,
+        torrent_file_dir: None,
+        torrent_file_done_dir: None,
         sources: Vec::new(),
         watch_folders: Vec::new(),
         capture_torrent_downloads: false,
@@ -655,6 +684,11 @@ mod tests {
             icon: None,
             hidden_from_all: false,
             save_dir: None,
+            seed_ratio_limit: None,
+            seed_time_limit_mins: None,
+            incomplete_dir: None,
+            torrent_file_dir: None,
+            torrent_file_done_dir: None,
             sources: Vec::new(),
             watch_folders: Vec::new(),
             capture_torrent_downloads: false,

@@ -288,6 +288,21 @@ export interface Category {
   hidden_from_all: boolean;
   /** Optional save-folder override; null = default download dir. */
   save_dir: string | null;
+  /** Seed ratio override for torrents filed here: null inherits the global limit,
+   *  0 seeds forever, >0 stops at that ratio. */
+  seed_ratio_limit: number | null;
+  /** Seed time override in minutes: null inherits the global, 0 = no time limit,
+   *  >0 stops seeding that many minutes after completion. */
+  seed_time_limit_mins: number | null;
+  /** Optional incomplete-staging folder for in-progress downloads (torrent + HTTP);
+   *  null downloads straight into the save folder. */
+  incomplete_dir: string | null;
+  /** Save a copy of each added torrent's .torrent file into this folder; null keeps
+   *  no copy. Torrent sources only. */
+  torrent_file_dir: string | null;
+  /** Move the saved .torrent copy here once the torrent completes (a separate home
+   *  for finished torrents); null leaves it in torrent_file_dir. */
+  torrent_file_done_dir: string | null;
   /** Which add-methods this category accepts; empty = any source. */
   sources: AddMethodKind[];
   /** Folders watched for dropped .torrent files (auto-added under this category). */

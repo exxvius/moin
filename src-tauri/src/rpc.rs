@@ -159,7 +159,7 @@ fn handle_add(engine: &Engine, fallback_dir: &Path, rt: &Handle, mut request: Re
     // torrent then resolves its metadata as it downloads.
     let _guard = rt.enter();
     let result = if is_magnet(&req.url) {
-        engine.add_torrent(req.url, dir, category, Vec::new(), None, Vec::new())
+        engine.add_torrent(req.url, dir, category, Vec::new(), None, Vec::new(), false)
     } else {
         engine.add_http(req.url, dir, category, req.headers, req.filename)
     };

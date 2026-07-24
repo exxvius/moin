@@ -40,7 +40,9 @@ impl Store {
                  torrent_source TEXT,
                  uploaded       INTEGER NOT NULL DEFAULT 0,
                  torrent_files  TEXT,
-                 own_dir        INTEGER NOT NULL DEFAULT 0
+                 own_dir        INTEGER NOT NULL DEFAULT 0,
+                 final_dir      TEXT,
+                 skip_torrent_export INTEGER NOT NULL DEFAULT 0
              );",
         )
         .map_err(err)?;
@@ -68,6 +70,11 @@ impl Store {
             "ALTER TABLE tasks ADD COLUMN own_dir INTEGER NOT NULL DEFAULT 0",
             [],
         );
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN final_dir TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE tasks ADD COLUMN skip_torrent_export INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
         // Backfill a completion time for rows finished before this column existed.
         let _ = conn.execute(
             "UPDATE tasks SET completed_at = updated_at
@@ -85,7 +92,7 @@ impl Store {
                 "SELECT id, kind, url, filename, dest, status, total, received, error,
                         created_at, updated_at, archived, active_ms, completed_at, backend,
                         category, headers, info_hash, torrent_source, uploaded, torrent_files,
-                        own_dir
+                        own_dir, final_dir, skip_torrent_export
                  FROM tasks ORDER BY created_at DESC",
             )
             .map_err(err)?;
@@ -108,6 +115,7 @@ impl Store {
                     completed_at: r.get(13)?,
                     backend: r.get(14)?,
                     category: r.get(15)?,
+                    final_dir: r.get(22)?,
                     headers: r
                         .get::<_, Option<String>>(16)?
                         .and_then(|s| serde_json::from_str(&s).ok())
@@ -128,6 +136,7 @@ impl Store {
                     peers: 0,
                     up_speed: 0,
                     own_dir: r.get::<_, i64>(21)? != 0,
+                    skip_torrent_export: r.get::<_, i64>(23)? != 0,
                     force_seed: false,
                     force_start: false,
                 })
@@ -144,14 +153,15 @@ impl Store {
                    (id, kind, url, filename, dest, status, total, received, error,
                     created_at, updated_at, archived, active_ms, completed_at, backend,
                     category, headers, info_hash, torrent_source, uploaded, torrent_files,
-                    own_dir)
+                    own_dir, final_dir, skip_torrent_export)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,
-                         ?18,?19,?20,?21,?22)
+                         ?18,?19,?20,?21,?22,?23,?24)
                  ON CONFLICT(id) DO UPDATE SET
                    status=?6, total=?7, received=?8, error=?9, updated_at=?11,
                    archived=?12, active_ms=?13, completed_at=?14, backend=?15,
                    category=?16, headers=?17, info_hash=?18, torrent_source=?19,
-                   uploaded=?20, torrent_files=?21, own_dir=?22",
+                   uploaded=?20, torrent_files=?21, own_dir=?22, final_dir=?23,
+                   skip_torrent_export=?24",
                 params![
                     t.id,
                     kind_str(t.kind),
@@ -175,6 +185,8 @@ impl Store {
                     t.uploaded,
                     files_json(&t.files),
                     t.own_dir as i64,
+                    t.final_dir,
+                    t.skip_torrent_export as i64,
                 ],
             )
             .map_err(err)?;
@@ -328,6 +340,7 @@ mod tests {
             active_ms: 500,
             backend: Some("embedded".into()),
             category: None,
+            final_dir: None,
             headers: BTreeMap::new(),
             info_hash: None,
             torrent_source: None,
@@ -338,6 +351,7 @@ mod tests {
             peers: 0,
             up_speed: 0,
             own_dir: false,
+            skip_torrent_export: false,
             force_seed: false,
             force_start: false,
         }

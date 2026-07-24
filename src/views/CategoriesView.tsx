@@ -83,6 +83,11 @@ function blankCategory(): Category {
     icon: null,
     hidden_from_all: false,
     save_dir: null,
+    seed_ratio_limit: null,
+    seed_time_limit_mins: null,
+    incomplete_dir: null,
+    torrent_file_dir: null,
+    torrent_file_done_dir: null,
     sources: [],
     watch_folders: [],
     capture_torrent_downloads: false,
@@ -359,6 +364,110 @@ interface EditorProps {
   onCancel: () => void;
 }
 
+/** A save-folder-style row: a path readout with Choose/Change and Clear buttons. */
+function FolderRow({
+  label,
+  desc,
+  value,
+  onPick,
+  onClear,
+}: {
+  label: string;
+  desc: string;
+  value: string | null;
+  onPick: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="setting-row">
+      <div>
+        <div className="setting-label">{label}</div>
+        <div className="dim">{desc}</div>
+        {value && <div className="dim path cat-savedir">{value}</div>}
+      </div>
+      <div className="tool-actions">
+        <button className="dl-btn" onClick={onPick}>
+          {value ? "Change…" : "Choose…"}
+        </button>
+        {value && (
+          <button className="dl-btn danger" onClick={onClear}>
+            Clear
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** A seed-limit field with three modes — inherit the global default, seed
+ *  forever, or a custom value (`null` / `0` / `>0` respectively). */
+function SeedLimitField({
+  label,
+  desc,
+  unit,
+  step,
+  value,
+  onChange,
+}: {
+  label: string;
+  desc: string;
+  unit: string;
+  step: number;
+  value: number | null;
+  onChange: (v: number | null) => void;
+}) {
+  const mode = value === null ? "inherit" : value === 0 ? "unlimited" : "custom";
+  return (
+    <div className="setting-row">
+      <div>
+        <div className="setting-label">{label}</div>
+        <div className="dim">{desc}</div>
+      </div>
+      <div className="seed-limit-control">
+        <div className="method-chips">
+          <button
+            className={`method-chip${mode === "inherit" ? " on" : ""}`}
+            aria-pressed={mode === "inherit"}
+            onClick={() => onChange(null)}
+          >
+            Global
+          </button>
+          <button
+            className={`method-chip${mode === "unlimited" ? " on" : ""}`}
+            aria-pressed={mode === "unlimited"}
+            onClick={() => onChange(0)}
+          >
+            Forever
+          </button>
+          <button
+            className={`method-chip${mode === "custom" ? " on" : ""}`}
+            aria-pressed={mode === "custom"}
+            onClick={() => onChange(value && value > 0 ? value : step)}
+          >
+            Custom
+          </button>
+        </div>
+        {mode === "custom" && (
+          <div className="seed-limit-input">
+            <input
+              className="add-input"
+              type="number"
+              min={step}
+              step={step}
+              value={value ?? ""}
+              onChange={(e) => {
+                const n = parseFloat(e.target.value);
+                onChange(Number.isFinite(n) && n > 0 ? n : step);
+              }}
+            />
+            <span className="dim">{unit}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CategoryEditor({ initial, onSave, onCancel }: EditorProps) {
   const [draft, setDraft] = useState<Category>(initial);
   const patch = (change: Partial<Category>) =>
@@ -408,6 +517,14 @@ function CategoryEditor({ initial, onSave, onCancel }: EditorProps) {
       title: "Choose a save folder",
     });
     if (typeof picked === "string") patch({ save_dir: picked });
+  };
+
+  // Pick a folder into any of the category's path fields (incomplete staging,
+  // .torrent export). Shares the OS picker with the save-folder button.
+  const pickInto = (field: keyof Category, title: string) => async () => {
+    const picked = await open({ directory: true, multiple: false, title });
+    if (typeof picked === "string")
+      patch({ [field]: picked } as Partial<Category>);
   };
 
   // Watched-folder source: toggling it off clears the folders so the source is
@@ -578,6 +695,14 @@ function CategoryEditor({ initial, onSave, onCancel }: EditorProps) {
             </div>
           </div>
 
+          <FolderRow
+            label="Incomplete folder"
+            desc="Stage in-progress downloads here, then move the finished content into the save folder on completion. Leave unset to download in place."
+            value={draft.incomplete_dir}
+            onPick={pickInto("incomplete_dir", "Choose an incomplete folder")}
+            onClear={() => patch({ incomplete_dir: null })}
+          />
+
           <div className="setting-row">
             <div>
               <div className="setting-label">Hide from All filter</div>
@@ -709,6 +834,47 @@ function CategoryEditor({ initial, onSave, onCancel }: EditorProps) {
             automation={draft.automation}
             onChange={(automation) => patch({ automation })}
           />
+
+          <div className="cat-section">
+            <div className="setting-label">Seeding &amp; torrent files</div>
+            <div className="dim">
+              Torrent-only. Seeding limits stop uploading once a torrent filed here
+              hits a ratio or time; “Global” follows the app-wide setting.
+            </div>
+            <SeedLimitField
+              label="Seed ratio limit"
+              desc="Stop seeding once uploaded ÷ downloaded reaches this."
+              unit="ratio"
+              step={0.1}
+              value={draft.seed_ratio_limit}
+              onChange={(v) => patch({ seed_ratio_limit: v })}
+            />
+            <SeedLimitField
+              label="Seed time limit"
+              desc="Stop seeding this long after the torrent finishes."
+              unit="minutes"
+              step={1}
+              value={draft.seed_time_limit_mins}
+              onChange={(v) => patch({ seed_time_limit_mins: v })}
+            />
+            <FolderRow
+              label="Save .torrent files to"
+              desc="Keep a copy of each added torrent's .torrent file in this folder."
+              value={draft.torrent_file_dir}
+              onPick={pickInto("torrent_file_dir", "Choose a .torrent folder")}
+              onClear={() => patch({ torrent_file_dir: null })}
+            />
+            <FolderRow
+              label="Completed .torrent files to"
+              desc="When a torrent finishes, move its .torrent copy here — a separate home for completed torrents."
+              value={draft.torrent_file_done_dir}
+              onPick={pickInto(
+                "torrent_file_done_dir",
+                "Choose a folder for completed .torrent files",
+              )}
+              onClear={() => patch({ torrent_file_done_dir: null })}
+            />
+          </div>
 
           <div className="setting-row">
             <div>
