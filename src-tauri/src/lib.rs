@@ -201,6 +201,8 @@ pub fn run() {
             commands::cancel_download,
             commands::remove_download,
             commands::delete_download,
+            commands::remove_downloads,
+            commands::delete_downloads,
             commands::retry_download,
             commands::forget_download,
             commands::get_settings,

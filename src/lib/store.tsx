@@ -165,6 +165,9 @@ interface StoreValue {
   cancel: (id: string) => Promise<void>;
   remove: (id: string) => Promise<void>;
   delete: (id: string) => Promise<void>;
+  /** Batched remove/delete for a whole selection (one atomic backend op). */
+  removeMany: (ids: string[]) => Promise<void>;
+  deleteMany: (ids: string[]) => Promise<void>;
   retry: (id: string) => Promise<void>;
   forget: (id: string) => Promise<void>;
   /** Move downloads to a category (null = uncategorized). */
@@ -238,6 +241,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       cancel: (id) => api.cancelDownload(id),
       remove: (id) => api.removeDownload(id),
       delete: (id) => api.deleteDownload(id),
+      removeMany: (ids) => api.removeDownloads(ids),
+      deleteMany: (ids) => api.deleteDownloads(ids),
       retry: (id) => api.retryDownload(id),
       forget: (id) => api.forgetDownload(id),
       moveToCategory: (ids, category) => api.moveToCategory(ids, category),

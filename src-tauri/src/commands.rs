@@ -158,6 +158,18 @@ pub async fn delete_download(state: State<'_, AppState>, id: String) -> Result<(
     state.engine.delete(&id).await
 }
 
+/// Remove a whole selection from the list in one batched operation (keep files).
+#[tauri::command]
+pub async fn remove_downloads(state: State<'_, AppState>, ids: Vec<String>) -> Result<(), String> {
+    state.engine.archive_many(ids, false).await
+}
+
+/// Delete a whole selection (files too) in one batched operation.
+#[tauri::command]
+pub async fn delete_downloads(state: State<'_, AppState>, ids: Vec<String>) -> Result<(), String> {
+    state.engine.archive_many(ids, true).await
+}
+
 /// Retry an archived download from scratch (re-queues it fresh).
 #[tauri::command]
 pub async fn retry_download(state: State<'_, AppState>, id: String) -> Result<(), String> {

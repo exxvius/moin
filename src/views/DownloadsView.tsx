@@ -786,10 +786,10 @@ export function DownloadsView() {
   // A torrent carries real data even mid-download, so it's deleted too, not just
   // removed.
   const deleteSelection = (tasks: Task[]) => {
-    Promise.allSettled(tasks.map((t) => store.delete(t.id))).then((results) => {
-      const failed = results.find((r) => r.status === "rejected");
-      if (failed?.status === "rejected") setError(errorText(failed.reason));
-    });
+    // One batched backend call so the whole selection is taken out of the queue
+    // atomically — otherwise pump can re-start (and re-download) a task in the gap
+    // between individual deletes.
+    void store.deleteMany(tasks.map((t) => t.id)).catch((e) => setError(errorText(e)));
   };
 
   // The category picker the "Move to category…" entry expands into — each row
@@ -1103,7 +1103,8 @@ export function DownloadsView() {
       } else {
         items.push({
           label: `Remove ${tasks.length} from list (keep files)`,
-          onClick: () => runAll(ids, store.remove),
+          onClick: () =>
+            void store.removeMany(ids).catch((e) => setError(errorText(e))),
         });
         items.push({
           label: `Delete ${tasks.length} from disk`,
@@ -1115,7 +1116,8 @@ export function DownloadsView() {
       items.push({
         label: `Remove ${tasks.length} from list`,
         danger: true,
-        onClick: () => runAll(ids, store.remove),
+        onClick: () =>
+          void store.removeMany(ids).catch((e) => setError(errorText(e))),
       });
     }
     return items;

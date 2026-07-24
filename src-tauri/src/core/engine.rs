@@ -823,6 +823,40 @@ impl Engine {
         Ok(())
     }
 
+    /// Archive a whole selection at once (remove, or delete files). The batch is the
+    /// point: it takes *every* target out of the startable pool under a single lock
+    /// before any per-item detach/delete, so `pump` can't start one of them in the
+    /// window between individual commands — which was re-adding a torrent to the
+    /// session and re-downloading its files right after they were deleted. Returns
+    /// the first error, if any (a deferred delete surfaces its own error on the task).
+    pub async fn archive_many(&self, ids: Vec<String>, delete_file: bool) -> Result<(), String> {
+        {
+            let mut tasks = self.inner.tasks.lock().unwrap();
+            for id in &ids {
+                let Some(entry) = tasks.get_mut(id) else {
+                    continue;
+                };
+                if entry.control.is_some() {
+                    // Running: record the intent now so it's off-limits immediately.
+                    entry.pending_archive = Some(delete_file);
+                } else if entry.task.status == TaskStatus::Queued {
+                    // Queued: pull it out of the queue so pump won't start it.
+                    entry.task.status = TaskStatus::Canceled;
+                }
+            }
+        }
+        let mut first_err = None;
+        for id in ids {
+            if let Err(e) = self.archive(&id, delete_file).await {
+                first_err.get_or_insert(e);
+            }
+        }
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
     /// Remove from the list: archive the record (kept for stats), delete the
     /// partial file, and leave any finished file on disk.
     pub async fn remove(&self, id: &str) -> Result<(), String> {
