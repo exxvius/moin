@@ -33,6 +33,20 @@ pub fn app_info() -> AppInfo {
     }
 }
 
+/// Hide the main window to the tray — the "minimize to tray" choice in the
+/// quit-confirm prompt (keeps downloads and seeding running).
+#[tauri::command]
+pub fn hide_window(window: tauri::WebviewWindow) {
+    let _ = window.hide();
+}
+
+/// Quit the app now — the "quit anyway" choice in the quit-confirm prompt. The
+/// engine winds down cleanly on the way out (see the run-loop exit handler).
+#[tauri::command]
+pub fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
 /// Check GitHub for a newer release, for the settings About/Update card.
 #[tauri::command]
 pub async fn check_update() -> Result<crate::core::update::UpdateInfo, String> {

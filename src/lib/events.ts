@@ -9,7 +9,14 @@ export const EV = {
   updated: "moin-task-updated",
   removed: "moin-task-removed",
   toolProgress: "moin-tool-progress",
+  confirmQuit: "moin-confirm-quit",
 } as const;
+
+/** Subscribe to the "confirm quit" prompt request (close attempted with active
+ *  transfers and tray-minimize off); returns an unlisten function. */
+export function subscribeConfirmQuit(onConfirm: () => void): Promise<UnlistenFn> {
+  return listen(EV.confirmQuit, () => onConfirm());
+}
 
 export interface TaskHandlers {
   onAdded?: (task: Task) => void;

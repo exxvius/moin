@@ -11,9 +11,12 @@ pub mod events;
 pub mod rpc;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter as _, Manager};
 
 use crate::commands::AppState;
@@ -22,6 +25,52 @@ use crate::core::task::{Task, TaskProgress};
 
 /// How often the coalesced progress buffer is flushed to the UI as one event.
 const PROGRESS_FLUSH_MS: u64 = 250;
+
+/// Bring the main window back to the foreground — shared by the tray, the tray
+/// menu, and the single-instance relaunch handler.
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// Install the system tray: an icon that restores the window on click, with a
+/// menu to show or quit. The tray is always present, so a user who sets the close
+/// button to minimize has a way back to the window (and out of the app).
+fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "Show moin", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit moin", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let Some(icon) = app.default_window_icon().cloned() else {
+        tracing::warn!("no window icon available; skipping the tray");
+        return Ok(());
+    };
+    TrayIconBuilder::with_id("main")
+        .icon(icon)
+        .tooltip("moin")
+        .menu(&menu)
+        // Left-clicking the tray shows the window; right-click opens the menu.
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_main_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
 
 /// Bridges the engine's [`Emitter`] onto Tauri's event system.
 struct AppEmitter {
@@ -116,11 +165,7 @@ pub fn run() {
         // its window is focused and the new process exits, so the RPC port is never
         // double-bound.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
+            show_main_window(app);
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
@@ -195,10 +240,41 @@ pub fn run() {
             }
 
             app.manage(AppState { engine });
+
+            // System tray, so "minimize to tray" on close has somewhere to go.
+            if let Err(e) = setup_tray(&app.handle().clone()) {
+                tracing::warn!("couldn't create the tray icon: {e}");
+            }
             Ok(())
+        })
+        // Close button: when the setting says so, hide to the tray (downloads and
+        // seeding keep running) instead of quitting. Read live so the choice applies
+        // without a restart.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() != "main" {
+                    return;
+                }
+                let Some(state) = window.app_handle().try_state::<AppState>() else {
+                    return;
+                };
+                if state.engine.settings().close_to_tray {
+                    // Minimize to tray instead of quitting.
+                    api.prevent_close();
+                    let _ = window.hide();
+                } else if state.engine.has_active_transfers() {
+                    // Quitting would stop active downloads/seeding — let the UI
+                    // confirm (minimize / quit anyway / cancel) instead of quitting.
+                    api.prevent_close();
+                    let _ = window.emit(events::CONFIRM_QUIT, ());
+                }
+                // Otherwise nothing is running: let the close through and quit.
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
+            commands::hide_window,
+            commands::quit_app,
             commands::check_update,
             commands::add_download,
             commands::prepare_torrent,
@@ -240,14 +316,23 @@ pub fn run() {
         .expect("error while running moin")
         .run(|app_handle, event| {
             // On exit, wind the engines down cleanly (flush torrent resume state,
-            // stop the aria2 daemon) before the process goes away.
-            if let tauri::RunEvent::ExitRequested { .. } = event {
+            // stop the aria2 daemon) before the process goes away. Guarded so it runs
+            // exactly once — a window-close quit fires `ExitRequested`, while the
+            // tray's `app.exit(0)` fires `Exit`; we cover both.
+            let winding_down = matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            );
+            if winding_down && !SHUTDOWN_DONE.swap(true, Ordering::SeqCst) {
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     tauri::async_runtime::block_on(state.engine.shutdown());
                 }
             }
         });
 }
+
+/// Guards the one-time engine shutdown so it runs once across the exit events.
+static SHUTDOWN_DONE: AtomicBool = AtomicBool::new(false);
 
 fn init_logging(data_dir: &std::path::Path) {
     use tracing_subscriber::{fmt, EnvFilter};

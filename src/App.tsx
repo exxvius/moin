@@ -10,8 +10,11 @@ import {
   SettingsIcon,
   ThemeToggleIcon,
 } from "./components/icons";
+import { QuitConfirmModal } from "./components/QuitConfirmModal";
 import { StoreProvider } from "./lib/store";
 import { initCursorFx } from "./lib/cursor";
+import { subscribeConfirmQuit } from "./lib/events";
+import { api } from "./lib/api";
 import { useTheme } from "./lib/theme";
 import { useAccent } from "./lib/accent";
 
@@ -30,9 +33,19 @@ function Shell() {
   const [theme, toggleTheme] = useTheme();
   const [accent, setAccent] = useAccent();
   const [view, setView] = useState<View>("downloads");
+  const [quitPrompt, setQuitPrompt] = useState(false);
 
   // Cursor-proximity border glow on cards + download rows.
   useEffect(() => initCursorFx(), []);
+
+  // The backend asks for confirmation when the window is closed with transfers
+  // running and "minimize to tray" off — show the quit prompt.
+  useEffect(() => {
+    const un = subscribeConfirmQuit(() => setQuitPrompt(true));
+    return () => {
+      un.then((u) => u());
+    };
+  }, []);
 
   // Halt looping animations while the window is hidden/minimized/occluded, so the
   // compositor isn't repainting the lava blobs and live progress bars for a
@@ -117,6 +130,17 @@ function Shell() {
           <SettingsView accent={accent} setAccent={setAccent} />
         )}
       </main>
+
+      {quitPrompt && (
+        <QuitConfirmModal
+          onCancel={() => setQuitPrompt(false)}
+          onMinimize={() => {
+            setQuitPrompt(false);
+            api.hideWindow();
+          }}
+          onQuit={() => api.quitApp()}
+        />
+      )}
     </div>
   );
 }

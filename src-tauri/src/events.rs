@@ -21,3 +21,8 @@ pub const TASK_REMOVED: &str = "moin-task-removed";
 /// Progress while a managed tool (aria2c) downloads its binary. Payload:
 /// `ToolProgress` — received/total bytes of the archive.
 pub const TOOL_PROGRESS: &str = "moin-tool-progress";
+
+/// The user tried to close the window while transfers are active and the tray
+/// setting is off — the UI shows a confirm prompt (minimize / quit / cancel)
+/// instead of quitting outright. No payload.
+pub const CONFIRM_QUIT: &str = "moin-confirm-quit";

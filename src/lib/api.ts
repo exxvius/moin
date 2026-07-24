@@ -15,6 +15,8 @@ import type {
 
 export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
+  hideWindow: () => invoke<void>("hide_window"),
+  quitApp: () => invoke<void>("quit_app"),
   addDownload: (url: string, category?: string | null) =>
     invoke<Task>("add_download", { url, category: category ?? null }),
   prepareTorrent: (source: string) =>
