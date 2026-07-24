@@ -130,6 +130,16 @@ impl TorrentEngine {
             .cloned()
     }
 
+    /// Wind the session down on app exit: pause every managed torrent (which
+    /// flushes its have-bitfield to disk) and cancel the session's tasks, so the
+    /// next launch resumes from complete state instead of re-fetching the tail. A
+    /// no-op if the session was never built (HTTP-only run).
+    pub async fn shutdown(&self) {
+        if let Some(session) = self.session.get() {
+            session.stop().await;
+        }
+    }
+
     /// Where the resolved `.torrent` for an info hash is cached, so a magnet
     /// doesn't have to re-resolve from the swarm on download / restart.
     fn meta_path(&self, info_hash: &str) -> PathBuf {
@@ -398,6 +408,11 @@ impl TorrentEngine {
         // When this seeding session began — set the first time we observe finished,
         // so the seed-time limit counts from completion, not from add.
         let mut seed_start: Option<Instant> = None;
+        // The bytes we resumed with. librqbit reports progress_bytes = 0 for the brief
+        // Initializing window before it's live with the trusted have-set, so we floor
+        // the reported progress at this to stop the bar dipping to 0 and crawling back
+        // up on launch. Real progress only ever grows past it.
+        let resumed_received = task.received;
         let info_hash = handle.info_hash();
         loop {
             let stats = handle.stats();
@@ -489,7 +504,10 @@ impl TorrentEngine {
             let received = if finished {
                 stats.total_bytes
             } else {
-                stats.progress_bytes
+                // Floor at the resumed amount so the bar holds its position through
+                // the Initializing window (progress_bytes is 0 there) instead of
+                // snapping to 0 and easing back up.
+                stats.progress_bytes.max(resumed_received)
             };
             progress(received, total, Some(tick));
 
@@ -557,12 +575,120 @@ pub(crate) fn distributed_copies(avail: &[u32], have: &[u8], total: usize) -> f6
         .unwrap_or(0) as f64
 }
 
+/// Prune librqbit's session store and our resolved-`.torrent` cache down to the
+/// torrents moin still tracks. librqbit persists a session entry plus a fastresume
+/// `.bitv` for every torrent ever added and — because moin drives resume from its
+/// own manifest with `dont_restore_persisted` — never removes them on its own, so
+/// they pile up (a long-lived install accrues hundreds). `keep` is the set of info
+/// hashes (lowercase hex) moin still has a task for; every other entry/file is
+/// dropped. Runs at startup, before the session is built.
+pub fn prune_store(data_dir: &Path, keep: &HashSet<String>) {
+    let store = data_dir.join("torrent");
+    let session = store.join("session");
+
+    // Rewrite session.json to only the kept torrents. Parsing to a generic value
+    // and back preserves every field librqbit relies on; we only drop whole
+    // entries whose info hash moin no longer tracks.
+    let db_path = session.join("session.json");
+    if let Ok(bytes) = std::fs::read(&db_path) {
+        if let Ok(mut db) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+            if let Some(torrents) = db.get_mut("torrents").and_then(|t| t.as_object_mut()) {
+                let before = torrents.len();
+                torrents.retain(|_, v| {
+                    v.get("info_hash")
+                        .and_then(|h| h.as_str())
+                        .map(|h| keep.contains(&h.to_ascii_lowercase()))
+                        .unwrap_or(false)
+                });
+                if torrents.len() != before {
+                    if let Ok(out) = serde_json::to_vec(&db) {
+                        let _ = std::fs::write(&db_path, out);
+                    }
+                }
+            }
+        }
+    }
+
+    // Delete orphan fastresume/`.torrent` files (session store) and our own resolved
+    // `.torrent` cache (meta) whose info hash moin no longer tracks. A still-tracked
+    // torrent re-resolves a missing cache on demand, so this only ever sheds cruft.
+    for dir in [session, store.join("meta")] {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("");
+            if !matches!(ext, "bitv" | "torrent") {
+                continue;
+            }
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if !keep.contains(&stem) {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+}
+
 /// The cache path for a resolved `.torrent`, under `<data>/torrent/meta`.
 pub fn meta_path(data_dir: &Path, info_hash: &str) -> PathBuf {
     data_dir
         .join("torrent")
         .join("meta")
         .join(format!("{info_hash}.torrent"))
+}
+
+/// Build a magnet URI for a torrent from its `.torrent` bytes: info hash, display
+/// name, and every tracker in the file. Stored as the task's source so a torrent
+/// added from a `.torrent` file can still be re-fetched from the swarm after the
+/// file (and our cached copy) are gone — the browser-capture path converts a
+/// downloaded `.torrent` into a task and deletes the file, so without this a later
+/// re-download from Archive has nothing to resolve.
+pub fn magnet_from_bytes(bytes: &[u8], info_hash: &str, name: Option<&str>) -> String {
+    let mut magnet = format!("magnet:?xt=urn:btih:{info_hash}");
+    if let Some(n) = name.filter(|s| !s.is_empty()) {
+        magnet.push_str("&dn=");
+        magnet.push_str(&magnet_encode(n));
+    }
+    if let Ok(meta) = torrent_from_bytes::<ByteBufOwned>(bytes) {
+        // announce plus every tier of announce-list, de-duplicated in order.
+        let mut trackers: Vec<&ByteBufOwned> = Vec::new();
+        if let Some(a) = meta.announce.as_ref() {
+            trackers.push(a);
+        }
+        for tier in &meta.announce_list {
+            trackers.extend(tier.iter());
+        }
+        let mut seen: HashSet<String> = HashSet::new();
+        for a in trackers {
+            let url = String::from_utf8_lossy(a.as_ref());
+            let url = url.trim();
+            if !url.is_empty() && seen.insert(url.to_string()) {
+                magnet.push_str("&tr=");
+                magnet.push_str(&magnet_encode(url));
+            }
+        }
+    }
+    magnet
+}
+
+/// Percent-encode a magnet parameter value, escaping everything outside the
+/// RFC 3986 unreserved set so names and tracker URLs survive round-tripping.
+fn magnet_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 /// Parse `.torrent` bytes into our file model (torrent order preserved, all files

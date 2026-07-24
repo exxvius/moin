@@ -163,6 +163,17 @@ impl Engine {
 
         sweep_orphan_parts(tasks.values().map(|e| &e.task));
 
+        // Trim librqbit's session store + our .torrent cache to the torrents we still
+        // track, before the session is built. librqbit keeps a persisted entry and a
+        // fastresume file per torrent ever added and never prunes them itself, so they
+        // accumulate; we own the manifest, so we own the cleanup.
+        let keep: HashSet<String> = tasks
+            .values()
+            .filter_map(|e| e.task.info_hash.as_deref())
+            .map(|h| h.to_ascii_lowercase())
+            .collect();
+        torrent::prune_store(&data_dir, &keep);
+
         let tool = Arc::new(Aria2Tool::new(
             data_dir.clone(),
             settings.aria2_path.clone(),
@@ -515,13 +526,28 @@ impl Engine {
         // from the caller (the modal) is honored as-is; an empty list is the
         // headless path (watch folder), where the category's exclude rules decide
         // which files to keep (`auto_selection` returns empty = keep all).
-        let raw_files = meta
+        let cached_bytes = meta
             .info_hash
             .as_deref()
             .map(|h| torrent::meta_path(&self.inner.data_dir, h))
-            .and_then(|p| std::fs::read(p).ok())
-            .and_then(|b| torrent::files_from_bytes(&b).ok())
+            .and_then(|p| std::fs::read(p).ok());
+        let raw_files = cached_bytes
+            .as_deref()
+            .and_then(|b| torrent::files_from_bytes(b).ok())
             .unwrap_or_default();
+
+        // Normalize the stored source to a magnet whenever we know the info hash, so
+        // the torrent can always be re-fetched from the swarm later even if the
+        // original `.torrent` (and our cached copy) are gone — e.g. a browser-captured
+        // torrent whose `.torrent` was consumed on conversion, then removed and
+        // re-downloaded from Archive.
+        let stored_source = match (&meta.info_hash, &cached_bytes) {
+            (Some(hash), Some(bytes)) => {
+                torrent::magnet_from_bytes(bytes, hash, meta.name.as_deref())
+            }
+            (Some(hash), None) => format!("magnet:?xt=urn:btih:{hash}"),
+            _ => source.clone(),
+        };
         let effective: Vec<usize> = if selected.is_empty() {
             category::auto_selection(cat.as_ref(), &raw_files)
         } else {
@@ -560,7 +586,7 @@ impl Engine {
             let task = Task {
                 id: Uuid::new_v4().to_string(),
                 kind: TaskKind::Torrent,
-                url: source,
+                url: stored_source,
                 filename: display,
                 dest,
                 status: TaskStatus::Queued,
@@ -596,14 +622,17 @@ impl Engine {
         Ok(task)
     }
 
-    pub fn pause(&self, id: &str) {
+    pub fn pause(&self, id: &str) -> Result<(), String> {
         let updated = {
             let mut tasks = self.inner.tasks.lock().unwrap();
-            let Some(entry) = tasks.get_mut(id) else {
-                return;
-            };
+            let entry = tasks
+                .get_mut(id)
+                .ok_or("that download is no longer in your list")?;
             if entry.moving {
-                return; // mid-relocation; let the move finish first
+                return Err(
+                    "can't pause while the file is being moved — let the move finish first"
+                        .to_string(),
+                );
             }
             if let Some(control) = &entry.control {
                 // Running: ask it to stop; `finish` will mark it Paused.
@@ -614,12 +643,16 @@ impl Engine {
                 entry.task.updated_at = now_ms();
                 Some(entry.task.clone())
             } else {
-                None
+                return Err(format!(
+                    "nothing to pause — this download is {}",
+                    entry.task.status.label()
+                ));
             }
         };
         if let Some(task) = updated {
             self.persist_emit(&task);
         }
+        Ok(())
     }
 
     /// Kick the queue once at startup so torrents that were downloading or seeding
@@ -641,15 +674,23 @@ impl Engine {
         }
     }
 
-    pub fn resume(&self, id: &str) {
+    pub fn resume(&self, id: &str) -> Result<(), String> {
         let task = {
             let mut tasks = self.inner.tasks.lock().unwrap();
-            let Some(entry) = tasks.get_mut(id) else {
-                return;
-            };
-            if entry.moving || entry.control.is_some() || entry.task.status == TaskStatus::Completed
-            {
-                return;
+            let entry = tasks
+                .get_mut(id)
+                .ok_or("that download is no longer in your list")?;
+            if entry.moving {
+                return Err(
+                    "can't resume while the file is being moved — let the move finish first"
+                        .to_string(),
+                );
+            }
+            if entry.control.is_some() {
+                return Err("that download is already running".to_string());
+            }
+            if entry.task.status == TaskStatus::Completed {
+                return Err("that download has already finished".to_string());
             }
             entry.task.status = TaskStatus::Queued;
             entry.task.error = None;
@@ -658,20 +699,30 @@ impl Engine {
         };
         self.persist_emit(&task);
         Inner::pump(self.inner.clone());
+        Ok(())
     }
 
     /// Keep seeding a finished torrent past the ratio/time limit. Re-runs a
     /// stopped (Completed) torrent in force-seed mode, so the auto-stop is lifted
     /// for that session and it seeds until stopped by hand. No-op for a
     /// non-torrent, a busy task, or one that's already running.
-    pub fn start_seeding(&self, id: &str) {
+    pub fn start_seeding(&self, id: &str) -> Result<(), String> {
         let task = {
             let mut tasks = self.inner.tasks.lock().unwrap();
-            let Some(entry) = tasks.get_mut(id) else {
-                return;
-            };
-            if !entry.task.is_torrent() || entry.moving || entry.control.is_some() {
-                return;
+            let entry = tasks
+                .get_mut(id)
+                .ok_or("that download is no longer in your list")?;
+            if !entry.task.is_torrent() {
+                return Err("only torrents can seed".to_string());
+            }
+            if entry.moving {
+                return Err(
+                    "can't start seeding while the file is being moved — let the move finish first"
+                        .to_string(),
+                );
+            }
+            if entry.control.is_some() {
+                return Err("that torrent is already running".to_string());
             }
             entry.task.force_seed = true;
             entry.task.status = TaskStatus::Queued;
@@ -681,9 +732,10 @@ impl Engine {
         };
         self.persist_emit(&task);
         Inner::pump(self.inner.clone());
+        Ok(())
     }
 
-    pub async fn cancel(&self, id: &str) {
+    pub async fn cancel(&self, id: &str) -> Result<(), String> {
         // A torrent is detached from the session first (releasing its file handles);
         // a canceled download keeps nothing, so its partial data is dropped after.
         let torrent_hash = {
@@ -699,15 +751,18 @@ impl Engine {
 
         let task = {
             let mut tasks = self.inner.tasks.lock().unwrap();
-            let Some(entry) = tasks.get_mut(id) else {
-                return;
-            };
+            let entry = tasks
+                .get_mut(id)
+                .ok_or("that download is no longer in your list")?;
             if entry.moving {
-                return; // mid-relocation; let the move finish first
+                return Err(
+                    "can't stop while the file is being moved — let the move finish first"
+                        .to_string(),
+                );
             }
             if let Some(control) = &entry.control {
                 control.set(Signal::Cancel);
-                return; // `finish` handles the rest
+                return Ok(()); // `finish` handles the rest
             }
             entry.task.status = TaskStatus::Canceled;
             entry.task.updated_at = now_ms();
@@ -717,6 +772,7 @@ impl Engine {
         purge_files(&task, true);
         self.persist_emit(&task);
         Inner::pump(self.inner.clone());
+        Ok(())
     }
 
     /// Remove from the list: archive the record (kept for stats), delete the
@@ -1644,7 +1700,10 @@ impl Inner {
             entry.control = None;
             if let Some(delete_file) = entry.pending_archive.take() {
                 entry.pending_move = None; // a pending remove wins over a move
-                entry.task.archived = true;
+                                           // Stop it being re-queued, but hold off on `archived` until any
+                                           // requested file delete actually succeeds — see the Archive handler,
+                                           // which keeps the item (with an error) if the delete fails instead of
+                                           // archiving and orphaning the files.
                 entry.task.status = TaskStatus::Canceled;
                 entry.task.updated_at = now_ms();
                 Post::Archive(entry.task.clone(), delete_file)
@@ -1693,7 +1752,40 @@ impl Inner {
 
         match post {
             Post::Archive(task, delete_file) => {
-                purge_files(&task, delete_file);
+                // Delete first when asked. For a torrent this can genuinely fail
+                // (Windows may still hold the file for a beat after the session
+                // detached) — surface that and keep the item in the list instead of
+                // archiving and orphaning the data, mirroring the non-running path.
+                if delete_file && task.is_torrent() {
+                    if let Err(e) = delete_torrent_files(&task) {
+                        let task = {
+                            let mut tasks = inner.tasks.lock().unwrap();
+                            let Some(entry) = tasks.get_mut(&id) else {
+                                return;
+                            };
+                            entry.task.error = Some(format!("Couldn't delete the files: {e}. The download is still in your list — free the files (e.g. close a window that's in the folder) and use Delete again."));
+                            entry.task.updated_at = now_ms();
+                            entry.task.clone()
+                        };
+                        let _ = inner.store.lock().unwrap().upsert(&task);
+                        inner.emitter.updated(&task);
+                        Inner::pump(inner);
+                        return;
+                    }
+                } else {
+                    purge_files(&task, delete_file);
+                }
+                // Delete succeeded (or wasn't requested) — archive it now.
+                let task = {
+                    let mut tasks = inner.tasks.lock().unwrap();
+                    let Some(entry) = tasks.get_mut(&id) else {
+                        return;
+                    };
+                    entry.task.archived = true;
+                    entry.task.error = None;
+                    entry.task.updated_at = now_ms();
+                    entry.task.clone()
+                };
                 let _ = inner.store.lock().unwrap().upsert(&task);
                 inner.emitter.updated(&task);
                 Inner::pump(inner);

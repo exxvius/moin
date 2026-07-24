@@ -124,26 +124,22 @@ pub fn list_downloads(state: State<'_, AppState>) -> Vec<Task> {
 
 #[tauri::command]
 pub async fn pause_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.engine.pause(&id);
-    Ok(())
+    state.engine.pause(&id)
 }
 
 #[tauri::command]
 pub async fn resume_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.engine.resume(&id);
-    Ok(())
+    state.engine.resume(&id)
 }
 
 #[tauri::command]
 pub async fn start_seeding(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.engine.start_seeding(&id);
-    Ok(())
+    state.engine.start_seeding(&id)
 }
 
 #[tauri::command]
 pub async fn cancel_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.engine.cancel(&id).await;
-    Ok(())
+    state.engine.cancel(&id).await
 }
 
 #[tauri::command]

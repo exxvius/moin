@@ -148,6 +148,24 @@ impl TaskStatus {
         matches!(self, TaskStatus::Completed | TaskStatus::Canceled)
     }
 
+    /// A short human label for the status, for surfacing in action errors
+    /// ("nothing to pause — this download is already paused").
+    pub fn label(self) -> &'static str {
+        match self {
+            TaskStatus::Queued => "queued",
+            TaskStatus::Connecting => "connecting",
+            TaskStatus::Checking => "checking",
+            TaskStatus::Downloading => "downloading",
+            TaskStatus::Paused => "paused",
+            TaskStatus::Moving => "being moved",
+            TaskStatus::Completed => "finished",
+            TaskStatus::Seeding => "seeding",
+            TaskStatus::Failed => "failed",
+            TaskStatus::Stalled => "stalled",
+            TaskStatus::Canceled => "canceled",
+        }
+    }
+
     /// Waiting for or occupying a download worker slot. Seeding runs off the
     /// download queue, so it doesn't count here.
     pub fn is_active(self) -> bool {

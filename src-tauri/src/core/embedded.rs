@@ -58,6 +58,13 @@ impl DownloadBackend for EmbeddedBackend {
         self.torrent.reconfigure(net.torrent);
     }
 
+    async fn shutdown(&self) {
+        // Pause every torrent (flushing its resume bitfield) and stop the session
+        // so a graceful exit persists complete state. HTTP transfers keep no
+        // session, so there's nothing to wind down for them.
+        self.torrent.shutdown().await;
+    }
+
     async fn resolve_torrent(&self, source: &str) -> Option<Result<ResolvedTorrent, String>> {
         Some(self.torrent.resolve(source).await)
     }
