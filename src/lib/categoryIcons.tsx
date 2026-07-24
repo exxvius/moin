@@ -155,6 +155,22 @@ const Xxx = createLucideIcon("Xxx", [
   ["path", { d: "m10 8l4 8m-4 0l4-8m3 0l4 8m-4 0l4-8M3 8l4 8m-4 0l4-8", key: "xxx" }],
 ]);
 
+// A filled document-with-download-arrow mark, supplied by the author. Unlike the
+// stroke-drawn Lucide set, this one is a solid shape, so its path opts out of the
+// factory's default `fill:none`/`stroke` and paints with `currentColor` instead —
+// it still takes the same size/color props as every other icon.
+const FileDown = createLucideIcon("FileDown", [
+  [
+    "path",
+    {
+      d: "M20 8.94a1.3 1.3 0 0 0-.06-.27v-.09a1 1 0 0 0-.19-.28l-6-6a1 1 0 0 0-.28-.19h-.1a1.1 1.1 0 0 0-.31-.11H7a3 3 0 0 0-3 3v14a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3zm-6-3.53L16.59 8H15a1 1 0 0 1-1-1ZM18 19a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5v3a3 3 0 0 0 3 3h3Zm-4.71-4.71l-.29.3V12a1 1 0 0 0-2 0v2.59l-.29-.3a1 1 0 0 0-1.42 1.42l2 2a1 1 0 0 0 .33.21a.94.94 0 0 0 .76 0a1 1 0 0 0 .33-.21l2-2a1 1 0 0 0-1.42-1.42",
+      fill: "currentColor",
+      stroke: "none",
+      key: "file-down",
+    },
+  ],
+]);
+
 /** Ordered list for the picker grid: `[id, component]`. */
 export const CATEGORY_ICONS: readonly (readonly [string, LucideIcon])[] = [
   ["film", Film],
@@ -185,6 +201,7 @@ export const CATEGORY_ICONS: readonly (readonly [string, LucideIcon])[] = [
   ["file-text", FileText],
   ["file", File],
   ["files", Files],
+  ["file-down", FileDown],
   ["newspaper", Newspaper],
   ["book-open", BookOpen],
   ["book", Book],
