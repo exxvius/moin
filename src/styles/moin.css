@@ -2231,6 +2231,7 @@
   transition:
     border-color 240ms var(--ease),
     box-shadow 240ms var(--ease),
+    background 240ms var(--ease),
     /* Match the mouse-tracked border-glow bloom (--glow-radius, 240ms) so the
        tint sweeps across the card in step with it. */
     --tint-start 240ms var(--ease),
@@ -2274,14 +2275,25 @@
     var(--glass-border)
   );
 }
-/* Selected rows read as a plain 1px tone-tinted border (brighter than hover),
-   without the extra inset ring that made the edge thicker. */
+/* Selected rows stand out clearly from a merely-hovered one: a bright accent
+   border with a matching outer ring, a faint accent wash over the surface, and a
+   soft glow. Uses the category's icon color when set, else the theme accent. */
 .dl-card.selected {
   border-color: color-mix(
     in oklab,
-    var(--cat-glow, var(--accent)) 55%,
+    var(--cat-glow, var(--accent)) 80%,
     var(--glass-border)
   );
+  background:
+    linear-gradient(
+      color-mix(in oklab, var(--cat-glow, var(--accent)) 11%, transparent),
+      color-mix(in oklab, var(--cat-glow, var(--accent)) 11%, transparent)
+    ),
+    var(--glass-bg);
+  box-shadow:
+    var(--glass-highlight),
+    0 0 0 1px color-mix(in oklab, var(--cat-glow, var(--accent)) 45%, transparent),
+    0 6px 22px -10px color-mix(in oklab, var(--cat-glow, var(--accent)) 55%, transparent);
 }
 /* Archived cards aren't status-coloured (no live status to reflect). */
 .dl-card.archived {
