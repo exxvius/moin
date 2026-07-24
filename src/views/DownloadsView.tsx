@@ -867,6 +867,18 @@ export function DownloadsView() {
         onClick: () => runAction(store.startSeeding(task.id)),
       });
     }
+    // Force-start an incomplete torrent: it bypasses the queue limit and never
+    // stalls. Toggles off again.
+    if (
+      task.kind === "torrent" &&
+      task.status !== "completed" &&
+      task.status !== "seeding"
+    ) {
+      items.push({
+        label: task.force_start ? "Stop forcing" : "Force start",
+        onClick: () => runAction(store.forceStart(task.id)),
+      });
+    }
     if (task.status === "completed" || task.status === "seeding") {
       if (task.kind === "torrent") {
         const done = (task.files ?? []).filter((f) => f.selected);
@@ -992,6 +1004,18 @@ export function DownloadsView() {
     );
     const pausable = tasks.filter((t) => isActive(t) && t.status !== "paused");
     const cancelable = tasks.filter(isActive);
+    // Incomplete torrents can be force-started; finished ones can be re-seeded.
+    const forceable = tasks.filter(
+      (t) =>
+        t.kind === "torrent" &&
+        t.status !== "completed" &&
+        t.status !== "seeding" &&
+        !t.force_start,
+    );
+    const forced = tasks.filter((t) => t.kind === "torrent" && t.force_start);
+    const seedable = tasks.filter(
+      (t) => t.kind === "torrent" && t.status === "completed",
+    );
 
     const items: MenuEntry[] = [];
     if (resumable.length) {
@@ -1004,6 +1028,24 @@ export function DownloadsView() {
       items.push({
         label: `Pause ${pausable.length}`,
         onClick: () => runAll(pausable.map((t) => t.id), store.pause),
+      });
+    }
+    if (forceable.length) {
+      items.push({
+        label: `Force start ${forceable.length}`,
+        onClick: () => runAll(forceable.map((t) => t.id), store.forceStart),
+      });
+    }
+    if (forced.length) {
+      items.push({
+        label: `Stop forcing ${forced.length}`,
+        onClick: () => runAll(forced.map((t) => t.id), store.forceStart),
+      });
+    }
+    if (seedable.length) {
+      items.push({
+        label: `Start seeding ${seedable.length}`,
+        onClick: () => runAll(seedable.map((t) => t.id), store.startSeeding),
       });
     }
     const mv = moveEntry();

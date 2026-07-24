@@ -67,6 +67,9 @@ export interface Task {
   peers?: number;
   /** Upload speed in bytes/sec (live). */
   up_speed?: number;
+  /** The user force-started this torrent: it bypasses the queue limit and never
+   *  drops to stalled. Transient (cleared on restart). */
+  force_start?: boolean;
 }
 
 /** One connected peer, for the detail panel's Peers tab. */
