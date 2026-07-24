@@ -850,7 +850,9 @@ export function DownloadsView() {
     } else if (
       task.status === "failed" ||
       task.status === "canceled" ||
-      task.status === "stalled"
+      // A torrent's Stalled is a live, self-recovering state (still running), so it
+      // gets Pause below — only a stopped HTTP stall offers Try again.
+      (task.status === "stalled" && task.kind !== "torrent")
     ) {
       items.push({ label: "Try again", onClick: () => runAction(store.resume(task.id)) });
     } else if (task.status === "seeding") {
@@ -989,18 +991,20 @@ export function DownloadsView() {
       ];
     }
 
+    // A torrent's Stalled is a live, self-recovering state (still running), so it
+    // counts as active (pause/cancel) — only a stopped HTTP stall is resumable.
     const isActive = (t: Task) =>
       t.status !== "completed" &&
       t.status !== "failed" &&
       t.status !== "canceled" &&
-      t.status !== "stalled" &&
-      t.status !== "moving";
+      t.status !== "moving" &&
+      !(t.status === "stalled" && t.kind !== "torrent");
     const resumable = tasks.filter(
       (t) =>
         t.status === "paused" ||
         t.status === "failed" ||
         t.status === "canceled" ||
-        t.status === "stalled",
+        (t.status === "stalled" && t.kind !== "torrent"),
     );
     const pausable = tasks.filter((t) => isActive(t) && t.status !== "paused");
     const cancelable = tasks.filter(isActive);
