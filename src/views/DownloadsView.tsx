@@ -243,6 +243,15 @@ function errorText(e: unknown): string {
   return typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
 }
 
+/** Join a download's dest folder with a torrent file's relative path, matching the
+ *  separator the dest already uses (backslash on Windows) so the OS opener gets a
+ *  well-formed absolute path. */
+function joinPath(base: string, rel: string): string {
+  const sep = base.includes("\\") ? "\\" : "/";
+  const cleanBase = base.replace(/[\\/]+$/, "");
+  return cleanBase + sep + rel.split("/").join(sep);
+}
+
 interface Stats {
   totalDownloaded: number;
   avgSpeed: number;
@@ -743,13 +752,19 @@ export function DownloadsView() {
         .catch(() => {}),
   });
 
-  // Delete finished files from disk and drop the rest (partials) from the list,
-  // surfacing the first failure if a file couldn't be removed.
+  // Run a download action and surface any failure to the user, so an action that
+  // can't happen (nothing to pause, files locked, etc.) reports why instead of
+  // doing nothing silently.
+  const runAction = (p: Promise<unknown> | undefined) => {
+    void Promise.resolve(p).catch((e) => setError(errorText(e)));
+  };
+
+  // Delete every selected download's on-disk data (finished files or a torrent's
+  // partial content), then drop each from the list — surfacing the first failure.
+  // A torrent carries real data even mid-download, so it's deleted too, not just
+  // removed.
   const deleteSelection = (tasks: Task[]) => {
-    const jobs = tasks.map((t) =>
-      t.status === "completed" ? store.delete(t.id) : store.remove(t.id),
-    );
-    Promise.allSettled(jobs).then((results) => {
+    Promise.allSettled(tasks.map((t) => store.delete(t.id))).then((results) => {
       const failed = results.find((r) => r.status === "rejected");
       if (failed?.status === "rejected") setError(errorText(failed.reason));
     });
@@ -831,36 +846,57 @@ export function DownloadsView() {
 
     const items: MenuEntry[] = [];
     if (task.status === "paused") {
-      items.push({ label: "Resume download", onClick: () => store.resume(task.id) });
+      items.push({ label: "Resume download", onClick: () => runAction(store.resume(task.id)) });
     } else if (
       task.status === "failed" ||
       task.status === "canceled" ||
       task.status === "stalled"
     ) {
-      items.push({ label: "Try again", onClick: () => store.resume(task.id) });
+      items.push({ label: "Try again", onClick: () => runAction(store.resume(task.id)) });
     } else if (task.status === "seeding") {
       // A seeding torrent is done downloading; pausing it stops the upload.
-      items.push({ label: "Stop seeding", onClick: () => store.pause(task.id) });
+      items.push({ label: "Stop seeding", onClick: () => runAction(store.pause(task.id)) });
     } else if (task.status !== "completed") {
-      items.push({ label: "Pause download", onClick: () => store.pause(task.id) });
+      items.push({ label: "Pause download", onClick: () => runAction(store.pause(task.id)) });
     }
     // A finished torrent that stopped seeding can be put back to seeding, past any
     // ratio/time limit (it keeps going until stopped by hand).
     if (task.status === "completed" && task.kind === "torrent") {
       items.push({
         label: "Start seeding",
-        onClick: () => store.startSeeding(task.id),
+        onClick: () => runAction(store.startSeeding(task.id)),
       });
     }
     if (task.status === "completed" || task.status === "seeding") {
-      items.push({
-        label: task.kind === "torrent" ? "Open folder" : "Open",
-        onClick: () => openPath(task.dest).catch(() => {}),
-      });
-      items.push({
-        label: "Show in folder",
-        onClick: () => revealItemInDir(task.dest).catch(() => {}),
-      });
+      if (task.kind === "torrent") {
+        const done = (task.files ?? []).filter((f) => f.selected);
+        // A single-file torrent opens the file directly, whatever the layout;
+        // "Show in folder" then reveals that file. A multi-file torrent opens its
+        // content folder instead.
+        if (done.length === 1) {
+          const file = joinPath(task.dest, done[0].path);
+          items.push({ label: "Open", onClick: () => runAction(openPath(file)) });
+          items.push({
+            label: "Show in folder",
+            onClick: () => runAction(revealItemInDir(file)),
+          });
+        } else {
+          items.push({
+            label: "Open folder",
+            onClick: () => runAction(openPath(task.dest)),
+          });
+          items.push({
+            label: "Show in folder",
+            onClick: () => runAction(revealItemInDir(task.dest)),
+          });
+        }
+      } else {
+        items.push({ label: "Open", onClick: () => runAction(openPath(task.dest)) });
+        items.push({
+          label: "Show in folder",
+          onClick: () => runAction(revealItemInDir(task.dest)),
+        });
+      }
     }
     const mv = moveEntry();
     if (mv) items.push(mv);
@@ -876,7 +912,7 @@ export function DownloadsView() {
       items.push({
         label: "Cancel download",
         danger: true,
-        onClick: () => store.cancel(task.id),
+        onClick: () => runAction(store.cancel(task.id)),
       });
     }
 
@@ -896,20 +932,19 @@ export function DownloadsView() {
       } else {
         items.push({
           label: `Remove from list (keep ${noun})`,
-          onClick: () => store.remove(task.id),
+          onClick: () => runAction(store.remove(task.id)),
         });
         items.push({
           label: `Delete ${noun} from disk`,
           danger: true,
-          onClick: () =>
-            store.delete(task.id).catch((e) => setError(errorText(e))),
+          onClick: () => runAction(store.delete(task.id)),
         });
       }
     } else {
       items.push({
         label: "Remove from list",
         danger: true,
-        onClick: () => store.remove(task.id),
+        onClick: () => runAction(store.remove(task.id)),
       });
     }
     return items;
@@ -918,8 +953,13 @@ export function DownloadsView() {
   // Several rows: one action per verb, applied to whichever rows it fits.
   const multiMenu = (tasks: Task[]): MenuEntry[] => {
     const ids = tasks.map((t) => t.id);
+    // Apply a verb to a batch and surface the first failure, so a bulk action that
+    // partly (or wholly) fails says why instead of silently doing nothing.
     const runAll = (targets: string[], fn: (id: string) => Promise<unknown>) =>
-      Promise.allSettled(targets.map(fn));
+      Promise.allSettled(targets.map(fn)).then((results) => {
+        const failed = results.find((r) => r.status === "rejected");
+        if (failed?.status === "rejected") setError(errorText(failed.reason));
+      });
 
     if (tasks.every((t) => t.archived)) {
       return [
@@ -952,7 +992,6 @@ export function DownloadsView() {
     );
     const pausable = tasks.filter((t) => isActive(t) && t.status !== "paused");
     const cancelable = tasks.filter(isActive);
-    const completed = tasks.filter((t) => t.status === "completed");
 
     const items: MenuEntry[] = [];
     if (resumable.length) {
@@ -978,8 +1017,14 @@ export function DownloadsView() {
       });
     }
 
-    if (completed.length) {
-      // Some rows have a finished file worth keeping — offer the same choice.
+    // Anything with real data on disk — a finished file or a torrent's content
+    // (partial counts) — earns the keep-vs-delete choice, matching the single-row
+    // menu. A selection of only incomplete HTTP downloads (throwaway `.part`) just
+    // gets a plain remove.
+    const withFiles = tasks.filter(
+      (t) => t.status === "completed" || t.kind === "torrent",
+    );
+    if (withFiles.length) {
       if (!confirmRemove) {
         items.push({
           label: `Remove ${tasks.length}…`,
@@ -993,9 +1038,7 @@ export function DownloadsView() {
           onClick: () => runAll(ids, store.remove),
         });
         items.push({
-          label: `Delete ${completed.length} file${
-            completed.length > 1 ? "s" : ""
-          } from disk`,
+          label: `Delete ${tasks.length} from disk`,
           danger: true,
           onClick: () => deleteSelection(tasks),
         });
@@ -1343,11 +1386,8 @@ export function DownloadsView() {
               role="alertdialog"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="modal-title">Couldn't delete the file</div>
-              <div className="modal-body">
-                {error} The download is still in your list — fix the issue (e.g.
-                close whatever's using the file) and try again.
-              </div>
+              <div className="modal-title">That didn't work</div>
+              <div className="modal-body">{error}</div>
               <div className="modal-actions">
                 <button className="btn-primary" onClick={() => setError(null)}>
                   OK

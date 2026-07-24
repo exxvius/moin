@@ -50,10 +50,13 @@ const TABS: { id: Tab; label: string; icon: typeof Info }[] = [
   { id: "trackers", label: "Trackers", icon: Radio },
 ];
 
-/** Join the torrent's output folder with a file's relative path (std::path
- *  normalizes the separators on the Rust side). */
+/** Join the torrent's output folder with a file's relative path, matching the
+ *  separator the dest already uses (backslash on Windows). A mixed-separator path
+ *  is rejected by the Windows shell-open, so the file must be joined cleanly. */
 function filePath(dest: string, rel: string): string {
-  return `${dest}/${rel}`;
+  const sep = dest.includes("\\") ? "\\" : "/";
+  const base = dest.replace(/[\\/]+$/, "");
+  return base + sep + rel.split("/").join(sep);
 }
 
 /** A file-type icon from the extension, so the content list reads at a glance. */
@@ -374,7 +377,7 @@ function ContentTab({
   onSet: (indices: number[], value: boolean) => void;
   onSetAll: (value: boolean) => void;
 }) {
-  const [menu, setMenu] = useState<{ x: number; y: number; path: string } | null>(
+  const [menu, setMenu] = useState<{ x: number; y: number; index: number } | null>(
     null,
   );
 
@@ -383,18 +386,29 @@ function ContentTab({
 
   const openMenu = (e: ReactMouseEvent, index: number) => {
     e.preventDefault();
-    setMenu({ x: e.clientX, y: e.clientY, path: filePath(dest, files[index].path) });
+    // Stop the right-click bubbling to the row card, which would open the task's
+    // own context menu on top of this one.
+    e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY, index });
   };
 
-  const menuItems: MenuEntry[] = menu
-    ? [
-        { label: "Open", onClick: () => openPath(menu.path).catch(() => {}) },
-        {
-          label: "Show in folder",
-          onClick: () => revealItemInDir(menu.path).catch(() => {}),
-        },
-      ]
-    : [];
+  const menuItems: MenuEntry[] = (() => {
+    if (!menu) return [];
+    const f = files[menu.index];
+    const path = filePath(dest, f.path);
+    const done = f.size > 0 && f.received >= f.size;
+    const entries: MenuEntry[] = [];
+    // Only a fully-downloaded file can be opened; a partial one has nothing (or
+    // incomplete data) to hand to the OS.
+    if (done) {
+      entries.push({ label: "Open", onClick: () => openPath(path).catch(() => {}) });
+    }
+    entries.push({
+      label: "Show in folder",
+      onClick: () => revealItemInDir(path).catch(() => {}),
+    });
+    return entries;
+  })();
 
   const renderFileMeta = (index: number) => {
     const f = files[index];
