@@ -923,6 +923,20 @@
   gap: var(--space-3);
   padding: var(--space-4) 0;
 }
+.tm-duplicate {
+  padding: var(--space-3) 0 var(--space-2);
+}
+.tm-duplicate p {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.tm-dup-name {
+  color: var(--text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
 .tm-resolving p {
   margin: 0;
   font-size: var(--text-sm);

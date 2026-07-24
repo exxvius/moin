@@ -97,6 +97,17 @@ pub async fn add_torrent(
         .add_torrent(source, dir.into(), category, selected, folder, renames, false)
 }
 
+/// Merge a duplicate add's trackers into the torrent already in the list (same
+/// info hash) instead of adding a second copy. Driven by the "merge trackers"
+/// choice in the add UI's duplicate prompt.
+#[tauri::command]
+pub async fn merge_torrent_trackers(
+    state: State<'_, AppState>,
+    source: String,
+) -> Result<Task, String> {
+    state.engine.merge_torrent_trackers(source).await
+}
+
 /// Live detail (files, peers, trackers) for a torrent, polled by its expanded
 /// card.
 #[tauri::command]

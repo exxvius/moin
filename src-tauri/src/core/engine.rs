@@ -19,8 +19,8 @@ use super::embedded::EmbeddedBackend;
 use super::settings::{CategoryChangeBehavior, Settings};
 use super::store::Store;
 use super::task::{
-    filename_from_url, now_ms, sanitize_filename, Task, TaskKind, TaskProgress, TaskStatus,
-    TorrentDetails, TorrentPreview,
+    filename_from_url, now_ms, sanitize_filename, DuplicateTorrent, Task, TaskKind, TaskProgress,
+    TaskStatus, TorrentDetails, TorrentPreview,
 };
 use super::tool::{Aria2Tool, ToolStatus};
 use super::torrent::{self, parse_meta};
@@ -48,6 +48,11 @@ struct Entry {
     /// re-queued (rather than settled) so it re-adds and, with its fastresume cleared,
     /// verifies its data against disk.
     pending_recheck: bool,
+    /// A plain re-add requested while running (e.g. to apply merged trackers): once
+    /// it stops it's re-queued keeping its progress. Unlike `pending_recheck` it
+    /// doesn't zero `received` — the re-verify (fastresume is dropped on detach)
+    /// recomputes it, and the bar holds steady meanwhile instead of dipping to 0.
+    pending_readd: bool,
     /// True while the file is being relocated (status `Moving`). Guards the task
     /// against pause/resume/cancel and defers a remove until the move finishes.
     moving: bool,
@@ -70,6 +75,7 @@ impl Entry {
             pending_archive: None,
             pending_move: None,
             pending_recheck: false,
+            pending_readd: false,
             moving: false,
         }
     }
@@ -379,11 +385,28 @@ impl Engine {
             (default_dir, layout)
         };
 
+        // Flag an already-present torrent (same info hash, not archived) so the add
+        // UI can offer to merge trackers instead of adding a second copy.
+        let duplicate = {
+            let tasks = self.inner.tasks.lock().unwrap();
+            tasks
+                .values()
+                .find(|e| {
+                    !e.task.archived
+                        && e.task.info_hash.as_deref() == Some(resolved.info_hash.as_str())
+                })
+                .map(|e| DuplicateTorrent {
+                    id: e.task.id.clone(),
+                    name: e.task.filename.clone(),
+                })
+        };
+
         Ok(TorrentPreview {
             resolved,
             suggested_category: suggested,
             default_dir,
             suggested_layout,
+            duplicate,
         })
     }
 
@@ -862,6 +885,104 @@ impl Engine {
         self.persist_emit(&task);
         Inner::pump(self.inner.clone());
         Ok(())
+    }
+
+    /// Re-add a torrent to the session so a change to its stored source (e.g. merged
+    /// trackers) takes effect now: detach it and re-queue. Detaching drops the
+    /// fastresume, so the re-add re-verifies against disk — but `received` is kept,
+    /// so the bar holds at its current value through the check instead of dipping.
+    /// A no-op for a non-torrent, a moving task, or one with no info hash.
+    async fn readd_torrent(&self, id: &str) {
+        let (info_hash, was_running) = {
+            let mut tasks = self.inner.tasks.lock().unwrap();
+            let Some(entry) = tasks.get_mut(id) else {
+                return;
+            };
+            if !entry.task.is_torrent() || entry.moving {
+                return;
+            }
+            let Some(hash) = entry.task.info_hash.clone() else {
+                return;
+            };
+            // Set the intent before detaching so, if detaching stops the run loop, it
+            // re-queues (via `pending_readd`) instead of settling as canceled.
+            if entry.control.is_some() {
+                entry.pending_readd = true;
+                (hash, true)
+            } else {
+                (hash, false)
+            }
+        };
+        let _ = self.remove_torrent_from_session(&info_hash).await;
+        if was_running {
+            return; // `finish` re-queues via `pending_readd`
+        }
+        // Not running: re-queue now so it re-adds with the new source.
+        let task = {
+            let mut tasks = self.inner.tasks.lock().unwrap();
+            let Some(entry) = tasks.get_mut(id) else {
+                return;
+            };
+            entry.task.status = TaskStatus::Queued;
+            entry.task.error = None;
+            entry.task.updated_at = now_ms();
+            entry.task.clone()
+        };
+        self.persist_emit(&task);
+        Inner::pump(self.inner.clone());
+    }
+
+    /// Merge the trackers advertised by `source` into the torrent already in the
+    /// list with the same info hash — instead of adding a second copy. New trackers
+    /// are unioned into the existing torrent's stored magnet (so they survive and
+    /// apply on every future add); if the torrent is currently active, it's re-added
+    /// so they take effect immediately (which re-verifies against disk, since the
+    /// engine can't hot-add trackers to a live torrent). Returns the existing task.
+    pub async fn merge_torrent_trackers(&self, source: String) -> Result<Task, String> {
+        let source = source.trim().to_string();
+        let meta = parse_meta(&source)?;
+        let hash = meta.info_hash.ok_or("couldn't identify that torrent")?;
+        let new_trackers = torrent::trackers_from_source(&source);
+
+        // Find the existing torrent and note whether it's actively running/seeding.
+        let (id, active) = {
+            let tasks = self.inner.tasks.lock().unwrap();
+            let entry = tasks
+                .values()
+                .find(|e| !e.task.archived && e.task.info_hash.as_deref() == Some(hash.as_str()))
+                .ok_or("that torrent isn't in your downloads")?;
+            (entry.task.id.clone(), entry.control.is_some())
+        };
+
+        // Union the incoming trackers into the stored magnet. If nothing is new,
+        // there's nothing to do — return the task as-is.
+        let (task, merged_any) = {
+            let mut tasks = self.inner.tasks.lock().unwrap();
+            let Some(entry) = tasks.get_mut(&id) else {
+                return Err("that torrent is no longer in your downloads".to_string());
+            };
+            let mut trackers = torrent::trackers_from_magnet(&entry.task.url);
+            let existing: HashSet<String> = trackers.iter().cloned().collect();
+            let fresh: Vec<String> = new_trackers
+                .into_iter()
+                .filter(|t| !existing.contains(t))
+                .collect();
+            if fresh.is_empty() {
+                return Ok(entry.task.clone());
+            }
+            trackers.extend(fresh);
+            entry.task.url = torrent::build_magnet(&hash, Some(&entry.task.filename), &trackers);
+            entry.task.updated_at = now_ms();
+            (entry.task.clone(), true)
+        };
+        self.persist_emit(&task);
+
+        // Apply live only when it's already running/seeding — an idle torrent picks
+        // the new trackers up on its next start with no re-verify.
+        if merged_any && active {
+            self.readd_torrent(&id).await;
+        }
+        Ok(task)
     }
 
     /// Keep seeding a finished torrent past the ratio/time limit. Re-runs a
@@ -2167,6 +2288,16 @@ impl Inner {
                 entry.task.status = TaskStatus::Queued;
                 entry.task.error = None;
                 entry.task.received = 0;
+                entry.task.updated_at = now_ms();
+                Post::Requeue(entry.task.clone())
+            } else if std::mem::take(&mut entry.pending_readd) {
+                // Re-add (e.g. to apply merged trackers): re-queue keeping progress.
+                // The on-disk re-verify recomputes `received`, so we don't zero it —
+                // the bar holds at its current value instead of dipping to 0.
+                entry.pending_archive = None;
+                entry.pending_move = None;
+                entry.task.status = TaskStatus::Queued;
+                entry.task.error = None;
                 entry.task.updated_at = now_ms();
                 Post::Requeue(entry.task.clone())
             } else if let Some(delete_file) = entry.pending_archive.take() {

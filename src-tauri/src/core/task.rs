@@ -72,6 +72,18 @@ pub struct TorrentPreview {
     /// Content layout the suggested category prefers (the modal pre-selects it).
     /// `Original` when nothing is suggested.
     pub suggested_layout: super::category::LayoutMode,
+    /// Set when this torrent is already in the list (same info hash, not archived):
+    /// the existing task's id + name, so the add UI can offer to merge trackers
+    /// instead of adding a second copy. `None` when it's new.
+    pub duplicate: Option<DuplicateTorrent>,
+}
+
+/// A torrent already in the list that a new add matches by info hash — the hook
+/// for the "merge trackers or skip" prompt.
+#[derive(Debug, Clone, Serialize)]
+pub struct DuplicateTorrent {
+    pub id: String,
+    pub name: String,
 }
 
 /// One connected peer, for the detail panel's Peers tab.

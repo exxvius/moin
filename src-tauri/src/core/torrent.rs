@@ -366,12 +366,17 @@ impl TorrentEngine {
                 .map(|f| Some(PathBuf::from(&f.path)))
                 .collect()
         });
+        // Trackers stored on the task (its magnet, including any merged in from a
+        // duplicate add) are passed as custom trackers so they augment the cached
+        // `.torrent`'s own on every add. A no-op when the source is already the magnet.
+        let extra_trackers = trackers_from_magnet(&task.url);
         let add_opts = AddTorrentOptions {
             output_folder: Some(task.dest.clone()),
             // Write over existing partials so a resume picks up where it left off.
             overwrite: true,
             only_files: selected_indices(&task.files),
             output_overrides: overrides,
+            trackers: (!extra_trackers.is_empty()).then_some(extra_trackers),
             ..Default::default()
         };
 
@@ -727,31 +732,75 @@ pub fn meta_path(data_dir: &Path, info_hash: &str) -> PathBuf {
 /// downloaded `.torrent` into a task and deletes the file, so without this a later
 /// re-download from Archive has nothing to resolve.
 pub fn magnet_from_bytes(bytes: &[u8], info_hash: &str, name: Option<&str>) -> String {
+    build_magnet(info_hash, name, &trackers_from_bytes(bytes))
+}
+
+/// Build a magnet URI from an info hash, optional display name, and a tracker list
+/// (each added as a `&tr=` param, in order). Empty tracker entries are skipped.
+pub fn build_magnet(info_hash: &str, name: Option<&str>, trackers: &[String]) -> String {
     let mut magnet = format!("magnet:?xt=urn:btih:{info_hash}");
     if let Some(n) = name.filter(|s| !s.is_empty()) {
         magnet.push_str("&dn=");
         magnet.push_str(&magnet_encode(n));
     }
-    if let Ok(meta) = torrent_from_bytes::<ByteBufOwned>(bytes) {
-        // announce plus every tier of announce-list, de-duplicated in order.
-        let mut trackers: Vec<&ByteBufOwned> = Vec::new();
-        if let Some(a) = meta.announce.as_ref() {
-            trackers.push(a);
-        }
-        for tier in &meta.announce_list {
-            trackers.extend(tier.iter());
-        }
-        let mut seen: HashSet<String> = HashSet::new();
-        for a in trackers {
-            let url = String::from_utf8_lossy(a.as_ref());
-            let url = url.trim();
-            if !url.is_empty() && seen.insert(url.to_string()) {
-                magnet.push_str("&tr=");
-                magnet.push_str(&magnet_encode(url));
-            }
+    for url in trackers {
+        let url = url.trim();
+        if !url.is_empty() {
+            magnet.push_str("&tr=");
+            magnet.push_str(&magnet_encode(url));
         }
     }
     magnet
+}
+
+/// Every tracker in a `.torrent`'s bytes — `announce` plus each announce-list
+/// tier, de-duplicated in order. Empty on malformed bytes.
+pub fn trackers_from_bytes(bytes: &[u8]) -> Vec<String> {
+    let Ok(meta) = torrent_from_bytes::<ByteBufOwned>(bytes) else {
+        return Vec::new();
+    };
+    let mut raw: Vec<&ByteBufOwned> = Vec::new();
+    if let Some(a) = meta.announce.as_ref() {
+        raw.push(a);
+    }
+    for tier in &meta.announce_list {
+        raw.extend(tier.iter());
+    }
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for a in raw {
+        let url = String::from_utf8_lossy(a.as_ref());
+        let url = url.trim();
+        if !url.is_empty() && seen.insert(url.to_string()) {
+            out.push(url.to_string());
+        }
+    }
+    out
+}
+
+/// The tracker URLs declared in a magnet URI (its `tr=` params), in order. Empty
+/// for a non-magnet or unparseable string.
+pub fn trackers_from_magnet(source: &str) -> Vec<String> {
+    Magnet::parse(source.trim())
+        .map(|m| m.trackers)
+        .unwrap_or_default()
+}
+
+/// The trackers a torrent source advertises: a magnet's `tr=` params, or a local
+/// `.torrent` file's announce list. Empty for a remote URL (not fetched here) or
+/// anything unreadable.
+pub fn trackers_from_source(source: &str) -> Vec<String> {
+    let source = source.trim();
+    if source.to_ascii_lowercase().starts_with("magnet:") {
+        trackers_from_magnet(source)
+    } else if is_remote(source) {
+        Vec::new()
+    } else {
+        std::fs::read(source)
+            .ok()
+            .map(|b| trackers_from_bytes(&b))
+            .unwrap_or_default()
+    }
 }
 
 /// Percent-encode a magnet parameter value, escaping everything outside the

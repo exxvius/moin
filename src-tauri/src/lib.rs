@@ -191,6 +191,7 @@ pub fn run() {
             commands::add_download,
             commands::prepare_torrent,
             commands::add_torrent,
+            commands::merge_torrent_trackers,
             commands::torrent_details,
             commands::set_torrent_files,
             commands::list_downloads,

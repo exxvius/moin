@@ -163,6 +163,21 @@ export function AddTorrentModal({ source, onClose }: Props) {
       .catch(() => {});
   };
 
+  // Duplicate add: merge the incoming copy's trackers into the torrent already in
+  // the list instead of adding a second one.
+  const mergeTrackers = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.mergeTorrentTrackers(source);
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
   const add = async () => {
     if (!preview || busy || selectedCount === 0) return;
     setBusy(true);
@@ -196,8 +211,22 @@ export function AddTorrentModal({ source, onClose }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-title">
-          {preview ? preview.name || "Add torrent" : "Resolving torrent…"}
+          {preview
+            ? preview.duplicate
+              ? "Already in your downloads"
+              : preview.name || "Add torrent"
+            : "Resolving torrent…"}
         </div>
+
+        {preview?.duplicate && (
+          <div className="tm-duplicate">
+            <p>
+              <span className="tm-dup-name">{preview.duplicate.name}</span> is
+              already in your downloads. Merge this copy's trackers into it, or
+              skip adding it again.
+            </p>
+          </div>
+        )}
 
         {!preview && !error && (
           <div className="tm-resolving">
@@ -210,7 +239,7 @@ export function AddTorrentModal({ source, onClose }: Props) {
 
         {error && <p className="dl-error">{error}</p>}
 
-        {preview && (
+        {preview && !preview.duplicate && (
           <>
             <div className="tm-files-head">
               <span className="dim">
@@ -297,45 +326,62 @@ export function AddTorrentModal({ source, onClose }: Props) {
           </>
         )}
 
-        <div className="add-modal-foot">
-          {preview && store.categories.length > 0 && (
-            <Select
-              value={category}
-              ariaLabel="Category"
-              caret
-              onChange={changeCategory}
-              options={[
-                { value: "", label: "Uncategorized" },
-                ...store.categories.map((c) => ({
-                  value: c.id,
-                  label: (
-                    <span className="accent-option">
-                      <CategoryIcon
-                        icon={c.icon}
-                        color={c.color}
-                        iconColor={c.icon_color}
-                        size={16}
-                      />
-                      {c.name}
-                    </span>
-                  ),
-                })),
-              ]}
-            />
-          )}
-          <div className="add-modal-actions">
-            <button className="dl-btn" onClick={onClose} disabled={busy}>
-              Cancel
-            </button>
-            <button
-              className="btn-primary"
-              onClick={add}
-              disabled={!preview || busy || selectedCount === 0}
-            >
-              {busy ? "Adding…" : "Download"}
-            </button>
+        {preview?.duplicate ? (
+          <div className="add-modal-foot">
+            <div className="add-modal-actions">
+              <button className="dl-btn" onClick={onClose} disabled={busy}>
+                Skip
+              </button>
+              <button
+                className="btn-primary"
+                onClick={mergeTrackers}
+                disabled={busy}
+              >
+                {busy ? "Merging…" : "Merge trackers"}
+              </button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="add-modal-foot">
+            {preview && store.categories.length > 0 && (
+              <Select
+                value={category}
+                ariaLabel="Category"
+                caret
+                onChange={changeCategory}
+                options={[
+                  { value: "", label: "Uncategorized" },
+                  ...store.categories.map((c) => ({
+                    value: c.id,
+                    label: (
+                      <span className="accent-option">
+                        <CategoryIcon
+                          icon={c.icon}
+                          color={c.color}
+                          iconColor={c.icon_color}
+                          size={16}
+                        />
+                        {c.name}
+                      </span>
+                    ),
+                  })),
+                ]}
+              />
+            )}
+            <div className="add-modal-actions">
+              <button className="dl-btn" onClick={onClose} disabled={busy}>
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                onClick={add}
+                disabled={!preview || busy || selectedCount === 0}
+              >
+                {busy ? "Adding…" : "Download"}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>,
     document.body,

@@ -35,6 +35,8 @@ export const api = {
       folder,
       renames,
     }),
+  mergeTorrentTrackers: (source: string) =>
+    invoke<Task>("merge_torrent_trackers", { source }),
   torrentDetails: (id: string) =>
     invoke<TorrentDetails>("torrent_details", { id }),
   setTorrentFiles: (id: string, selected: number[]) =>

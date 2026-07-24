@@ -102,6 +102,15 @@ export interface TorrentPreview {
   default_dir: string;
   /** Content layout the suggested category prefers (modal pre-selects it). */
   suggested_layout: LayoutMode;
+  /** Set when this torrent is already in the list (same info hash): the existing
+   *  task's id + name, so the add UI can offer to merge trackers. Null when new. */
+  duplicate: DuplicateTorrent | null;
+}
+
+/** A torrent already in the list that a new add matches by info hash. */
+export interface DuplicateTorrent {
+  id: string;
+  name: string;
 }
 
 export interface TaskProgress {
