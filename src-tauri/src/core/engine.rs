@@ -1500,10 +1500,12 @@ impl Engine {
 
     /// Turn a finished `.torrent` download into an actual torrent: resolve the
     /// downloaded file, add it as a torrent under the same category (with that
-    /// category's automation), then archive the HTTP download and delete the spent
-    /// `.torrent`. Fired by `finish` when a completed HTTP `.torrent` landed in a
-    /// category with `capture_torrent_downloads` on. Best-effort — on any failure
-    /// the original download is left in place.
+    /// category's automation), then delete the spent `.torrent` and forget the HTTP
+    /// record entirely — a captured-then-converted torrent is never archived or
+    /// counted in stats, as if moin never held the `.torrent` at all. Fired by
+    /// `finish` when a completed HTTP `.torrent` landed in a category with
+    /// `capture_torrent_downloads` on. Best-effort — on any failure the original
+    /// download is left in place.
     async fn convert_download(&self, id: String) {
         let (source, category, parent) = {
             let tasks = self.inner.tasks.lock().unwrap();
@@ -1544,9 +1546,25 @@ impl Engine {
         };
 
         match self.add_torrent(source, dir, category, Vec::new(), folder, renames) {
-            // The .torrent was only a vehicle: drop the HTTP record + its file.
+            // The .torrent was only a vehicle: delete the spent file and drop the
+            // HTTP record for good — it's never archived or counted, so it neither
+            // shows in the Archive nor skews stats.
             Ok(_) => {
-                let _ = self.archive(&id, true).await;
+                let task = {
+                    let tasks = self.inner.tasks.lock().unwrap();
+                    tasks.get(&id).map(|e| e.task.clone())
+                };
+                if let Some(task) = task {
+                    // Off the async executor — the delete verifies + retries with sleeps.
+                    if let Err(e) = tokio::task::spawn_blocking(move || delete_torrent_files(&task))
+                        .await
+                        .unwrap_or_else(|e| Err(e.to_string()))
+                    {
+                        // A stray .torrent left on disk is harmless; forget the record anyway.
+                        tracing::warn!(id = %id, error = %e, "convert: couldn't delete the spent .torrent");
+                    }
+                }
+                self.forget(&id);
             }
             Err(e) => tracing::warn!(id = %id, error = %e, "convert: couldn't add the torrent"),
         }
@@ -2132,7 +2150,7 @@ impl Inner {
                 let _ = inner.store.lock().unwrap().upsert(&task);
                 inner.emitter.updated(&task);
                 // A completed `.torrent` download in a capture-enabled category is
-                // re-added as a torrent (then this HTTP record is archived).
+                // re-added as a torrent (then this HTTP record is dropped entirely).
                 Inner::maybe_convert_download(&inner, &task);
                 Inner::pump(inner);
             }
