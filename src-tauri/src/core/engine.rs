@@ -908,7 +908,11 @@ impl Engine {
                 }
             };
             if delete_file {
-                delete_torrent_files(&task)
+                // Off the async executor — the delete verifies + retries with sleeps.
+                let t = task.clone();
+                tokio::task::spawn_blocking(move || delete_torrent_files(&t))
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()))
                     .map_err(|e| format!("Couldn't delete the files: {e}. The download is still in your list — free the files (e.g. close a window that's in the folder) and try again."))?;
             }
 
@@ -1889,30 +1893,53 @@ impl Inner {
 
         match post {
             Post::Archive(task, delete_file) => {
-                // Delete first when asked. For a torrent this can genuinely fail
-                // (Windows may still hold the file for a beat after the session
-                // detached) — surface that and keep the item in the list instead of
-                // archiving and orphaning the data, mirroring the non-running path.
+                // Deleting a torrent's files: do it off an async task that first
+                // re-detaches the torrent from the session. A delete that raced the
+                // torrent's add can leave it still attached and writing, which
+                // re-creates the files right after they're removed (so the delete
+                // "succeeds" but the folder comes back). Re-detaching stops the writer;
+                // `delete_torrent_files` then verifies + retries. On genuine failure the
+                // item is kept with the error instead of archived-and-orphaned.
                 if delete_file && task.is_torrent() {
-                    if let Err(e) = delete_torrent_files(&task) {
+                    let inner2 = inner.clone();
+                    let id2 = id.clone();
+                    tokio::spawn(async move {
+                        if let Some(hash) = task.info_hash.clone() {
+                            let _ = inner2.embedded().remove_torrent(&hash).await;
+                        }
+                        let deleted = tokio::task::spawn_blocking({
+                            let task = task.clone();
+                            move || delete_torrent_files(&task)
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(e.to_string()));
+
                         let task = {
-                            let mut tasks = inner.tasks.lock().unwrap();
-                            let Some(entry) = tasks.get_mut(&id) else {
+                            let mut tasks = inner2.tasks.lock().unwrap();
+                            let Some(entry) = tasks.get_mut(&id2) else {
                                 return;
                             };
-                            entry.task.error = Some(format!("Couldn't delete the files: {e}. The download is still in your list — free the files (e.g. close a window that's in the folder) and use Delete again."));
+                            match &deleted {
+                                Ok(()) => {
+                                    entry.task.archived = true;
+                                    entry.task.error = None;
+                                }
+                                Err(e) => {
+                                    entry.task.error = Some(format!("Couldn't delete the files: {e}. The download is still in your list — free the files (e.g. close a window that's in the folder) and use Delete again."));
+                                }
+                            }
                             entry.task.updated_at = now_ms();
                             entry.task.clone()
                         };
-                        let _ = inner.store.lock().unwrap().upsert(&task);
-                        inner.emitter.updated(&task);
-                        Inner::pump(inner);
-                        return;
-                    }
-                } else {
-                    purge_files(&task, delete_file);
+                        let _ = inner2.store.lock().unwrap().upsert(&task);
+                        inner2.emitter.updated(&task);
+                        Inner::pump(inner2);
+                    });
+                    return;
                 }
-                // Delete succeeded (or wasn't requested) — archive it now.
+
+                // Keep-file, or a non-torrent: no writer race, settle synchronously.
+                purge_files(&task, delete_file);
                 let task = {
                     let mut tasks = inner.tasks.lock().unwrap();
                     let Some(entry) = tasks.get_mut(&id) else {
@@ -2396,13 +2423,13 @@ fn delete_torrent_files(task: &Task) -> Result<(), String> {
     // succeed moments later. Cheap insurance against a transient failure leaving a
     // stray errored task with un-deleted files.
     let mut last = Ok(());
-    for attempt in 0..4 {
+    for attempt in 0..6 {
         last = delete_torrent_files_once(task);
         if last.is_ok() {
             return Ok(());
         }
-        if attempt < 3 {
-            std::thread::sleep(Duration::from_millis(150));
+        if attempt < 5 {
+            std::thread::sleep(Duration::from_millis(150 * (attempt as u64 + 1)));
         }
     }
     last
@@ -2416,10 +2443,22 @@ fn delete_torrent_files_once(task: &Task) -> Result<(), String> {
     // deselected-file directories librqbit created but never filled, which a
     // file-by-file delete leaves behind (the "directory is not empty" failure).
     if task.own_dir {
-        return match std::fs::remove_dir_all(base) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e.to_string()),
+        match std::fs::remove_dir_all(base) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.to_string()),
+        }
+        // Verify: a still-attached writer can re-create files right after the tree is
+        // gone, so `remove_dir_all` returning Ok isn't proof. If the folder is back,
+        // report it as a failure so the retry (and the re-detach that precedes it)
+        // gets another go.
+        return if base.exists() {
+            Err(format!(
+                "folder came back after delete (still being written?): {}",
+                base.display()
+            ))
+        } else {
+            Ok(())
         };
     }
 
@@ -2446,8 +2485,14 @@ fn delete_torrent_files_once(task: &Task) -> Result<(), String> {
     for d in dirs {
         let _ = std::fs::remove_dir(d); // only removes empties; shared content stays
     }
-    // Surface a genuine leftover (a file we couldn't delete — likely open elsewhere)
-    // so the caller holds the item in the list for a retry.
+    // Verify none of our files came back (a still-attached writer re-creating them),
+    // and surface a genuine leftover so the caller retries / holds the item.
+    if let Some(f) = task.files.iter().find(|f| base.join(&f.path).exists()) {
+        return Err(format!(
+            "file came back after delete (still being written?): {}",
+            base.join(&f.path).display()
+        ));
+    }
     match failed {
         Some(e) => Err(e),
         None => Ok(()),
