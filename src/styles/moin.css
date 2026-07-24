@@ -2333,6 +2333,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* An errored download reads red at a glance: its name and its progress bar. */
+.dl-name-text.errored {
+  color: var(--bad);
+}
+.mini-bar.errored {
+  --tone: var(--bad);
+}
 /* Live torrent readings under the name: down/up speed + connected peers. */
 .dl-torrent-line {
   display: flex;

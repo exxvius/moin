@@ -70,13 +70,22 @@ const STATUS_CLASS: Record<TaskStatus, string> = {
   canceled: "faint",
 };
 
+/** A task is "errored" if it carries an error message or genuinely failed — this
+ *  is distinct from a user-canceled task (no error) or a transient stall. */
+function isErrored(t: Task): boolean {
+  return t.status === "failed" || !!t.error;
+}
+
 type FilterId =
   | "all"
   | "active"
-  | "seeding"
+  | "checking"
+  | "stalled"
   | "paused"
+  | "seeding"
   | "done"
-  | "issues"
+  | "errored"
+  | "canceled"
   | "archived";
 
 const FILTERS: { id: FilterId; label: string; match: (t: Task) => boolean }[] = [
@@ -92,9 +101,19 @@ const FILTERS: { id: FilterId; label: string; match: (t: Task) => boolean }[] = 
         t.status === "moving"),
   },
   {
+    id: "checking",
+    label: "Checking",
+    match: (t) => !t.archived && t.status === "checking",
+  },
+  {
+    id: "stalled",
+    label: "Stalled",
+    match: (t) => !t.archived && t.status === "stalled" && !isErrored(t),
+  },
+  {
     id: "paused",
     label: "Paused",
-    match: (t) => !t.archived && t.status === "paused",
+    match: (t) => !t.archived && t.status === "paused" && !isErrored(t),
   },
   {
     id: "seeding",
@@ -107,13 +126,14 @@ const FILTERS: { id: FilterId; label: string; match: (t: Task) => boolean }[] = 
     match: (t) => !t.archived && t.status === "completed",
   },
   {
-    id: "issues",
-    label: "Issues",
-    match: (t) =>
-      !t.archived &&
-      (t.status === "failed" ||
-        t.status === "canceled" ||
-        t.status === "stalled"),
+    id: "errored",
+    label: "Errored",
+    match: (t) => !t.archived && isErrored(t),
+  },
+  {
+    id: "canceled",
+    label: "Canceled",
+    match: (t) => !t.archived && t.status === "canceled" && !isErrored(t),
   },
   { id: "archived", label: "Archived", match: (t) => t.archived },
 ];
@@ -230,7 +250,6 @@ const BAR_CYCLE_MS = 1800;
 // Sorting by a live value buckets it, so rows only reorder once the value
 // meaningfully changes — near-tied downloads keep a stable order instead of
 // constantly trading places on every tick.
-const PROGRESS_STEP = 0.01; // 1% of progress
 const SPEED_STEP = 100_000; // 0.1 MB/s
 const ETA_STEP = 5; // seconds
 
@@ -580,10 +599,13 @@ export function DownloadsView() {
     const c: Record<FilterId, number> = {
       all: 0,
       active: 0,
-      seeding: 0,
+      checking: 0,
+      stalled: 0,
       paused: 0,
+      seeding: 0,
       done: 0,
-      issues: 0,
+      errored: 0,
+      canceled: 0,
       archived: 0,
     };
     for (const t of store.all) for (const f of FILTERS) if (f.match(t)) c[f.id]++;
@@ -1449,6 +1471,52 @@ export function DownloadsView() {
 
 /** Stable multi-level sort: compares by each level in the stack in order, so
  *  earlier sorts survive as tiebreakers under later ones. */
+/** Sort value for the Progress column. Progress isn't comparable across statuses
+ *  as a bare percentage, so it's tiered: seeding on top (by ratio), then the
+ *  in-flight downloads (by percent), then checking, then the not-yet-started, then
+ *  errored/stopped — each tier ordered by its own meaningful metric. Encoded as
+ *  `tier + within` where `within` stays < 1 so tiers never overlap; a `desc` sort
+ *  (progress's default) then reads top-to-bottom as described. */
+function progressSortValue(t: Task): number {
+  const frac = fracOf(t); // 0..1 percentage complete
+  const ratio = t.received > 0 ? (t.uploaded ?? 0) / t.received : 0;
+  let tier: number;
+  let within: number;
+  switch (t.status) {
+    case "seeding":
+      tier = 6;
+      within = Math.min(ratio / 10, 0.999); // by ratio (capped at 10x)
+      break;
+    case "completed":
+      tier = 5;
+      within = 0.999;
+      break;
+    case "downloading":
+    case "stalled":
+    case "paused":
+      tier = 4;
+      within = frac;
+      break;
+    case "checking":
+      tier = 3;
+      within = frac;
+      break;
+    case "connecting":
+    case "queued":
+    case "moving":
+      tier = 2;
+      within = frac;
+      break;
+    default: // failed, canceled
+      tier = 1;
+      within = frac;
+      break;
+  }
+  // Coarsen so live progress ticks don't constantly reshuffle rows within a tier.
+  const coarse = Math.round(Math.min(within, 0.999) * 100) / 100;
+  return tier + coarse * 0.999;
+}
+
 function sortRows(
   rows: Task[],
   stack: SortLevel[],
@@ -1470,7 +1538,7 @@ function sortRows(
       case "size":
         return t.total ?? 0;
       case "progress":
-        return Math.round(fracOf(t) / PROGRESS_STEP);
+        return progressSortValue(t);
       case "status":
         return STATUS_RANK[t.status];
       case "speed":
@@ -1605,7 +1673,11 @@ function Card({
               </span>
             )}
             <span className="dl-name-col">
-              <span className="dl-name-text">{task.filename}</span>
+              <span
+                className={`dl-name-text${isErrored(task) ? " errored" : ""}`}
+              >
+                {task.filename}
+              </span>
               {task.kind === "torrent" && (
                 <span className="dl-torrent-line">
                   <span
@@ -1672,7 +1744,7 @@ function Card({
             <span
               className={`mini-bar${indeterminate ? " indeterminate" : ""}${
                 live ? " live" : ""
-              }`}
+              }${isErrored(task) ? " errored" : ""}`}
               style={
                 pct != null
                   ? ({
@@ -1691,14 +1763,16 @@ function Card({
             </span>
           </span>
         );
-      case "status":
+      case "status": {
+        const errored = isErrored(task);
         return (
           <span
-            className={`dl-status ${STATUS_CLASS[task.status]} st-${task.status}`}
+            className={`dl-status ${errored ? "bad" : STATUS_CLASS[task.status]} st-${task.status}`}
           >
-            {STATUS_LABEL[task.status]}
+            {errored ? "Errored" : STATUS_LABEL[task.status]}
           </span>
         );
+      }
       case "speed":
         return <span className="num dim">{dl ? formatSpeed(speed) : "—"}</span>;
       case "eta":
