@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useState,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
@@ -120,6 +121,18 @@ function reorder<T>(arr: T[], from: number, to: number): T[] {
 export function CategoriesView() {
   const store = useStore();
   const cats = store.categories;
+  // How many downloads currently sit in each category (and uncategorized). Archived
+  // records aren't in the list, so they don't count.
+  const counts = useMemo(() => {
+    const byCat = new Map<string, number>();
+    let uncat = 0;
+    for (const t of store.all) {
+      if (t.archived) continue;
+      if (t.category) byCat.set(t.category, (byCat.get(t.category) ?? 0) + 1);
+      else uncat++;
+    }
+    return { byCat, uncat };
+  }, [store.all]);
   const [editing, setEditing] = useState<Category | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Category | null>(null);
   // App settings, for the uncategorized default save folder (download_dir).
@@ -206,12 +219,21 @@ export function CategoriesView() {
             </div>
           ) : (
             <div className="cat-list" ref={containerRef}>
-              {cats.map((c, i) => (
+              {cats.map((c, i) => {
+                const count = counts.byCat.get(c.id) ?? 0;
+                // Effects (hover glow/border) use the category's chosen effects
+                // color, falling back to its main color, then the theme accent.
+                const glowSrc = c.effects_color || c.color;
+                const style = {
+                  "--cat": categorySwatch(c.color),
+                  ...(glowSrc ? { "--cat-glow": categorySwatch(glowSrc) } : {}),
+                } as CSSProperties;
+                return (
                 <div
                   className="cat-card"
                   key={c.id}
                   data-id={c.id}
-                  style={{ "--cat": categorySwatch(c.color) } as CSSProperties}
+                  style={style}
                   onPointerDown={(e) => {
                     // Drag from anywhere on the card, but let the action buttons
                     // (Edit/Delete) still click normally.
@@ -227,11 +249,19 @@ export function CategoriesView() {
                       icon={c.icon}
                       color={c.color}
                       iconColor={c.icon_color}
-                      size={20}
+                      size={22}
                     />
                   </span>
                   <div className="cat-row-main">
-                    <div className="setting-label">{c.name || "Untitled"}</div>
+                    <div className="cat-name-row">
+                      <span className="setting-label">{c.name || "Untitled"}</span>
+                      <span
+                        className="cat-count"
+                        title={`${count} download${count === 1 ? "" : "s"}`}
+                      >
+                        {count}
+                      </span>
+                    </div>
                     <div className="dim cat-sub">{ruleSummary(c)}</div>
                     {c.save_dir && (
                       <div className="dim cat-sub path">Saves to {c.save_dir}</div>
@@ -249,7 +279,8 @@ export function CategoriesView() {
                     </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -258,10 +289,18 @@ export function CategoriesView() {
             editable — no name, color, icon, or rules. */}
         <div className="cat-card cat-card-uncat">
           <span className="cat-card-icon">
-            <CategoryIcon icon="inbox" color="" size={20} />
+            <CategoryIcon icon="inbox" color="" size={22} />
           </span>
           <div className="cat-row-main">
-            <div className="setting-label">Uncategorized</div>
+            <div className="cat-name-row">
+              <span className="setting-label">Uncategorized</span>
+              <span
+                className="cat-count"
+                title={`${counts.uncat} download${counts.uncat === 1 ? "" : "s"}`}
+              >
+                {counts.uncat}
+              </span>
+            </div>
             <div className="dim cat-sub path">
               {settings?.download_dir
                 ? `Saves to ${settings.download_dir}`
@@ -496,12 +535,19 @@ function CategoryEditor({ initial, onSave, onCancel }: EditorProps) {
               onChange={(v) => patch({ icon: v || null })}
               menuColor={categorySwatch(draft.icon_color || draft.color)}
               trigger={
-                <CategoryIcon
-                  icon={draft.icon}
-                  color={draft.color}
-                  iconColor={draft.icon_color}
-                  size={18}
-                />
+                draft.icon ? (
+                  // Match the 20px color swatch so the trigger box is the same size.
+                  <CategoryIcon
+                    icon={draft.icon}
+                    color={draft.color}
+                    iconColor={draft.icon_color}
+                    size={20}
+                  />
+                ) : (
+                  // No icon selected: an empty square (matching the grid's "no icon"
+                  // cell), not the color dot.
+                  <span className="grid-swatch no-color" />
+                )
               }
               items={ICON_ITEMS}
             />

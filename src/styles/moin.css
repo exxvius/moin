@@ -215,8 +215,13 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
+  width: 40px;
+  height: 40px;
   flex: none;
+  border-radius: var(--radius);
+  /* A tinted tile in the category's colour anchors the card. Colourless categories
+     fall back to a neutral chip. */
+  background: color-mix(in oklab, var(--cat, var(--text-dim)) 16%, var(--glass-bg));
 }
 /* Compact trigger for the color / icon pickers: a padded rounded box with the
    current swatch (or icon) as a rounded square inside it — not a full-width
@@ -337,10 +342,17 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Always reserve the scrollbar gutter (10px, matching global.css) so the cards
+     keep the same width whether or not the list overflows — and so the pinned
+     Uncategorized card below can line its right edge up with them. */
+  scrollbar-gutter: stable;
 }
-/* Uncategorized: a fixed, neutral row for the default save folder only. */
+/* Uncategorized: a fixed, neutral row for the default save folder only. Sits
+   outside the scroll area, so it mirrors the reserved gutter to stay flush with
+   the category cards. */
 .cat-card-uncat {
   flex: none;
+  margin-right: 10px;
   --cat: var(--text-dim);
   cursor: default;
 }
@@ -387,21 +399,46 @@
     transparent var(--tint-end)
   );
 }
+/* A slim accent stripe down the left edge in the category's colour — a clear,
+   at-a-glance identifier alongside the icon tile. */
+.cat-card::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 16%;
+  bottom: 16%;
+  width: 3px;
+  border-radius: 0 999px 999px 0;
+  background: var(--cat, transparent);
+  z-index: 1;
+}
 /* Keep the card content above the tint overlay. */
 .cat-card > * {
   position: relative;
   z-index: 1;
 }
+/* The category name reads as the card's title. */
+.cat-card .setting-label {
+  font-size: 1.05rem;
+  font-weight: 640;
+  letter-spacing: -0.01em;
+}
+/* Hover/drag "effects" use the category's chosen effects colour (--cat-glow),
+   falling back to the accent — distinct from the identity tint/tile/stripe which
+   use the main colour (--cat). */
 .cat-card:hover {
   --tint-start: 0%;
   --tint-end: 130%;
-  border-color: color-mix(in oklab, var(--cat, var(--accent)) 32%, var(--glass-border));
+  border-color: color-mix(in oklab, var(--cat-glow, var(--accent)) 42%, var(--glass-border));
+  box-shadow:
+    var(--glass-highlight),
+    0 6px 20px -12px color-mix(in oklab, var(--cat-glow, var(--accent)) 55%, transparent);
 }
 /* While grabbed: a frosted floating panel like the download list header. */
 .cat-card[data-dragging] {
   z-index: 3;
   cursor: grabbing;
-  border-color: color-mix(in oklab, var(--cat, var(--accent)) 40%, var(--glass-border));
+  border-color: color-mix(in oklab, var(--cat-glow, var(--accent)) 40%, var(--glass-border));
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
   box-shadow:
@@ -427,6 +464,38 @@
   display: flex;
   gap: var(--space-2);
   flex: none;
+}
+/* Name + count sit on one line; the badge follows the category name. */
+.cat-name-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.cat-name-row .setting-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Per-category download count — a compact squircle tinted with the category colour. */
+.cat-count {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  padding: 0 7px;
+  border-radius: 7px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: color-mix(in oklab, var(--cat, var(--text-dim)) 15%, transparent);
+  border: 1px solid color-mix(in oklab, var(--cat, var(--text-dim)) 24%, transparent);
 }
 .cat-tag {
   display: inline-flex;
