@@ -22,25 +22,23 @@ export function QuitConfirmModal({ onMinimize, onQuit, onCancel }: Props) {
   return createPortal(
     <div className="modal-backdrop" onClick={onCancel}>
       <div
-        className="modal"
+        className="modal quit-confirm-modal"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-title">Downloads are still running</div>
-        <div className="modal-body">
-          Quitting now stops your active downloads and seeding. Progress is saved
-          and they pick back up next time you open moin — but nothing transfers
-          while it's closed. Minimize to the tray to keep everything running.
+        <div className="modal-body quit-confirm-body">
+          Quitting will stop your active downloads and seeding.
         </div>
         <div className="modal-actions">
-          <button className="dl-btn" onClick={onCancel}>
+          <button className="qc-btn ghost" onClick={onCancel}>
             Cancel
           </button>
-          <button className="btn-primary" onClick={onMinimize}>
+          <button className="qc-btn" onClick={onMinimize} autoFocus>
             Minimize to tray
           </button>
-          <button className="dl-btn danger" onClick={onQuit}>
+          <button className="qc-btn danger" onClick={onQuit}>
             Quit anyway
           </button>
         </div>

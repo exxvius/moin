@@ -829,7 +829,7 @@
   justify-content: center;
   padding: var(--space-5);
   background: oklch(0% 0 0 / 0.5);
-  backdrop-filter: blur(3px);
+  backdrop-filter: blur(6px);
   animation: fade var(--duration) var(--ease);
 }
 .modal {
@@ -860,6 +860,58 @@
   justify-content: flex-end;
   gap: var(--space-2);
   margin-top: var(--space-5);
+}
+/* The quit prompt: a short one-liner with chunky solid buttons set well below
+ * it — a ghost Cancel, a solid default Minimize, and a danger Quit. */
+.quit-confirm-modal .modal-title {
+  font-size: var(--text-xl);
+}
+.quit-confirm-body {
+  margin-bottom: var(--space-6);
+}
+.quit-confirm-modal .modal-actions {
+  gap: var(--space-2);
+}
+.qc-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+  font-weight: 550;
+  box-shadow: var(--glass-highlight);
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    background var(--duration-fast) var(--ease),
+    color var(--duration-fast) var(--ease),
+    transform var(--duration-fast) var(--ease);
+}
+.qc-btn:hover {
+  border-color: var(--border-strong);
+  background: color-mix(in oklab, var(--text) 8%, var(--surface));
+}
+.qc-btn:active {
+  transform: translateY(1px);
+}
+.qc-btn.ghost {
+  background: transparent;
+  border-color: var(--border);
+  box-shadow: none;
+  color: var(--text-dim);
+}
+.qc-btn.ghost:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: transparent;
+}
+.qc-btn.danger:hover {
+  border-color: var(--bad);
+  color: var(--bad);
+  background: var(--surface);
 }
 
 /* ---- Toolbar add button ---- */
