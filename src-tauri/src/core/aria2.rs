@@ -525,6 +525,7 @@ async fn poll_torrent(rpc: &Rpc, gid: &str, control: &Control, progress: &Progre
         let tick = TorrentTick {
             uploaded: num(&status, "uploadLength"),
             up_speed: num(&status, "uploadSpeed"),
+            down_speed: num(&status, "downloadSpeed"),
             peers,
             seeders,
             leechers: peers.saturating_sub(seeders),

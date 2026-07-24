@@ -135,6 +135,11 @@ pub enum Outcome {
 pub struct TorrentTick {
     pub uploaded: u64,
     pub up_speed: u64,
+    /// Live download speed in bytes/sec, straight from the engine's per-byte
+    /// estimator. The engine reports this directly rather than deriving it from the
+    /// progress delta, which only moves when a whole piece verifies (jumpy, and
+    /// zero between piece completions even while bytes are flowing).
+    pub down_speed: u64,
     pub peers: u32,
     pub seeders: u32,
     pub leechers: u32,

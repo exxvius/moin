@@ -470,10 +470,20 @@ impl TorrentEngine {
             } else {
                 stats.progress_bytes.max(resumed_received)
             };
-            if received > last_progress {
-                last_progress = received;
+            // Live per-byte download speed from the engine's estimator (MiB/s → B/s).
+            let down_bps = stats
+                .live
+                .as_ref()
+                .map(|l| (l.download_speed.mbps * 1024.0 * 1024.0) as u64)
+                .unwrap_or(0);
+            // Data is flowing if bytes are being fetched (per-byte) or a piece just
+            // finished (per-piece). Either resets the stall timer, so the torrent
+            // leaves Stalled the moment anything arrives — not only when a whole
+            // piece verifies.
+            if down_bps > 0 || received > last_progress {
                 last_progress_at = Instant::now();
             }
+            last_progress = last_progress.max(received);
 
             // Once finished, stop seeding when the ratio or time limit is hit (0 /
             // zero means unlimited; a force-seed run passes both as unlimited). We
@@ -555,6 +565,7 @@ impl TorrentEngine {
             let tick = TorrentTick {
                 uploaded: stats.uploaded_bytes,
                 up_speed,
+                down_speed: down_bps,
                 peers,
                 seeders,
                 leechers,

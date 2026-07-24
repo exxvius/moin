@@ -858,29 +858,55 @@ impl Engine {
                 .filter(|e| e.task.is_torrent())
                 .map(|e| (e.task.info_hash.clone(), e.control.is_some()))
         };
-        if let Some((hash, running)) = torrent {
+        if let Some((hash, _)) = torrent {
+            // Record the archive intent (and, for a moving task, defer to the move
+            // handler) BEFORE detaching from the session. Detaching can make the run
+            // loop notice the torrent is gone and settle — if `pending_archive` isn't
+            // already set by then, it settles as a bare Canceled that drops the intent
+            // and leaves the row un-archived (needing a second delete).
+            let was_running = {
+                let mut tasks = self.inner.tasks.lock().unwrap();
+                let Some(entry) = tasks.get_mut(id) else {
+                    return Ok(());
+                };
+                if entry.moving {
+                    entry.pending_archive = Some(delete_file);
+                    return Ok(()); // the move-finish handler archives once it lands
+                }
+                if entry.control.is_some() {
+                    entry.pending_archive = Some(delete_file);
+                    true
+                } else {
+                    false
+                }
+            };
+            // Detach: releases the file handles and (for a running torrent) makes the
+            // loop stop. `finish` then sees `pending_archive` and does the delete +
+            // archive with the handles already freed.
             if let Some(hash) = hash {
                 self.remove_torrent_from_session(&hash).await?;
             }
-            // Running: the loop notices the torrent is gone and stops; `finish`
-            // archives the record and purges its files. Otherwise do it here.
-            let mut tasks = self.inner.tasks.lock().unwrap();
-            let Some(entry) = tasks.get_mut(id) else {
-                return Ok(());
-            };
-            if running {
-                entry.pending_archive = Some(delete_file);
-                if let Some(control) = &entry.control {
-                    control.set(Signal::Cancel);
+            if was_running {
+                // Belt-and-suspenders: cancel the loop too, in case it didn't notice
+                // the detach. Handles are already released by the awaited detach.
+                let tasks = self.inner.tasks.lock().unwrap();
+                if let Some(entry) = tasks.get(id) {
+                    if let Some(control) = &entry.control {
+                        control.set(Signal::Cancel);
+                    }
                 }
                 return Ok(());
             }
-            let task = entry.task.clone();
-            drop(tasks);
 
-            // Delete the files first so a failure (a file/folder open elsewhere)
-            // holds the download in the list — nothing is archived, and the user
-            // can free it and retry.
+            // Not running: delete the files first so a failure (a file/folder open
+            // elsewhere) holds the download in the list for a retry, then archive.
+            let task = {
+                let tasks = self.inner.tasks.lock().unwrap();
+                match tasks.get(id) {
+                    Some(entry) => entry.task.clone(),
+                    None => return Ok(()),
+                }
+            };
             if delete_file {
                 delete_torrent_files(&task)
                     .map_err(|e| format!("Couldn't delete the files: {e}. The download is still in your list — free the files (e.g. close a window that's in the folder) and try again."))?;
@@ -1699,7 +1725,18 @@ impl Inner {
                         // speed either. So hold speed at 0 off-phase, and keep the byte
                         // mark current so the first real Downloading sample is a clean
                         // delta, not a jump from wherever verification left off.
-                        if status == TaskStatus::Downloading {
+                        if let Some(tick) = torrent {
+                            // Torrent: take the engine's live per-byte estimate
+                            // directly. Deriving from the progress delta is piece-
+                            // level — flat between piece completions even while bytes
+                            // pour in — which is what made a downloading torrent read
+                            // as ~0 KB/s (and mislabelled it stalled).
+                            st.speed = if tick.status == TaskStatus::Downloading {
+                                tick.down_speed as f64
+                            } else {
+                                0.0
+                            };
+                        } else if status == TaskStatus::Downloading {
                             let inst = (received.saturating_sub(st.last_bytes)) as f64 / dt;
                             // Exponential smoothing so the number doesn't jitter.
                             st.speed = if st.speed == 0.0 {
