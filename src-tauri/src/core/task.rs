@@ -262,6 +262,12 @@ pub struct Task {
     /// survive a restart yet) and not sent to the UI.
     #[serde(skip)]
     pub force_seed: bool,
+    /// Transient: the user forced this torrent to run ("Force start"). It bypasses
+    /// the concurrency limit and never drops to `Stalled`, so it keeps trying even
+    /// with no peers. Sent to the UI (to mark the row and toggle the menu) but not
+    /// persisted — a restart clears it.
+    #[serde(default)]
+    pub force_start: bool,
 }
 
 impl Task {

@@ -453,10 +453,27 @@ impl TorrentEngine {
         // the reported progress at this to stop the bar dipping to 0 and crawling back
         // up on launch. Real progress only ever grows past it.
         let resumed_received = task.received;
+        // Stall tracking: the last received total we saw grow, and when. If it
+        // doesn't grow for `stall_timeout` while downloading, the torrent is stalled
+        // (no data flowing) — unless the user force-started it. It flips back to
+        // Downloading on its own the moment bytes arrive again.
+        let mut last_progress = resumed_received;
+        let mut last_progress_at = Instant::now();
         let info_hash = handle.info_hash();
         loop {
             let stats = handle.stats();
             let finished = stats.finished && stats.total_bytes > 0;
+            // The received total, floored at what we resumed with (progress_bytes is
+            // 0 during the brief Initializing window).
+            let received = if finished {
+                stats.total_bytes
+            } else {
+                stats.progress_bytes.max(resumed_received)
+            };
+            if received > last_progress {
+                last_progress = received;
+                last_progress_at = Instant::now();
+            }
 
             // Once finished, stop seeding when the ratio or time limit is hit (0 /
             // zero means unlimited; a force-seed run passes both as unlimited). We
@@ -506,11 +523,17 @@ impl TorrentEngine {
             }
 
             // Map librqbit's phase onto our status: verifying/resolving = Checking,
-            // otherwise Downloading, and Seeding once the selected files are done.
+            // Seeding once the selected files are done, Stalled when no data has
+            // flowed for the stall window (not force-started), otherwise Downloading.
+            let stalled = !control.force()
+                && !opts.stall_timeout.is_zero()
+                && last_progress_at.elapsed() >= opts.stall_timeout;
             let status = if finished {
                 TaskStatus::Seeding
             } else if matches!(stats.state, librqbit::TorrentStatsState::Initializing) {
                 TaskStatus::Checking
+            } else if stalled {
+                TaskStatus::Stalled
             } else {
                 TaskStatus::Downloading
             };
@@ -541,14 +564,6 @@ impl TorrentEngine {
             // total_bytes is 0 until a magnet resolves its metadata — report an
             // unknown total until then so the bar shows a resolving state.
             let total = (stats.total_bytes > 0).then_some(stats.total_bytes);
-            let received = if finished {
-                stats.total_bytes
-            } else {
-                // Floor at the resumed amount so the bar holds its position through
-                // the Initializing window (progress_bytes is 0 there) instead of
-                // snapping to 0 and easing back up.
-                stats.progress_bytes.max(resumed_received)
-            };
             progress(received, total, Some(tick));
 
             tokio::time::sleep(POLL_INTERVAL).await;

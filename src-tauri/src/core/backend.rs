@@ -7,7 +7,7 @@
 //! Adding one means writing a new `impl DownloadBackend` and registering it —
 //! nothing else in the engine changes.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,9 +24,16 @@ pub enum Signal {
 }
 
 /// A shared, cheap-to-poll control handle. The supervisor flips it; the backend
-/// reads it.
+/// reads it. Carries the run/pause/cancel signal plus a live "force" flag (the
+/// user force-started a torrent), both readable and settable while a run is live.
 #[derive(Debug, Clone, Default)]
-pub struct Control(Arc<AtomicU8>);
+pub struct Control(Arc<ControlState>);
+
+#[derive(Debug, Default)]
+struct ControlState {
+    signal: AtomicU8,
+    force: AtomicBool,
+}
 
 impl Control {
     pub fn new() -> Self {
@@ -34,15 +41,25 @@ impl Control {
     }
 
     pub fn set(&self, signal: Signal) {
-        self.0.store(signal as u8, Ordering::Relaxed);
+        self.0.signal.store(signal as u8, Ordering::Relaxed);
     }
 
     pub fn signal(&self) -> Signal {
-        match self.0.load(Ordering::Relaxed) {
+        match self.0.signal.load(Ordering::Relaxed) {
             1 => Signal::Pause,
             2 => Signal::Cancel,
             _ => Signal::Run,
         }
+    }
+
+    /// Set the live force-start flag; a running torrent picks it up on its next
+    /// poll (bypasses stall, keeps running with no peers).
+    pub fn set_force(&self, force: bool) {
+        self.0.force.store(force, Ordering::Relaxed);
+    }
+
+    pub fn force(&self) -> bool {
+        self.0.force.load(Ordering::Relaxed)
     }
 }
 

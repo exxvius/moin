@@ -138,6 +138,11 @@ pub async fn start_seeding(state: State<'_, AppState>, id: String) -> Result<(),
 }
 
 #[tauri::command]
+pub async fn force_start(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.engine.force_start(&id)
+}
+
+#[tauri::command]
 pub async fn cancel_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
     state.engine.cancel(&id).await
 }

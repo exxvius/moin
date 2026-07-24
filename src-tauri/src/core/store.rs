@@ -129,6 +129,7 @@ impl Store {
                     up_speed: 0,
                     own_dir: r.get::<_, i64>(21)? != 0,
                     force_seed: false,
+                    force_start: false,
                 })
             })
             .map_err(err)?;
@@ -338,6 +339,7 @@ mod tests {
             up_speed: 0,
             own_dir: false,
             force_seed: false,
+            force_start: false,
         }
     }
 

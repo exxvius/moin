@@ -284,6 +284,7 @@ impl Engine {
                 up_speed: 0,
                 own_dir: false,
                 force_seed: false,
+                force_start: false,
             };
             tasks.insert(task.id.clone(), Entry::idle(task.clone()));
             task
@@ -611,6 +612,7 @@ impl Engine {
                 up_speed: 0,
                 own_dir,
                 force_seed: false,
+                force_start: false,
             };
             tasks.insert(task.id.clone(), Entry::idle(task.clone()));
             task
@@ -699,6 +701,52 @@ impl Engine {
         };
         self.persist_emit(&task);
         Inner::pump(self.inner.clone());
+        Ok(())
+    }
+
+    /// Toggle force-start on a torrent: it bypasses the concurrency limit and never
+    /// drops to `Stalled`. Applied live to a running torrent (via its control) and
+    /// starts a stopped one. Toggling it off lets it queue and stall normally again.
+    pub fn force_start(&self, id: &str) -> Result<(), String> {
+        let (task, start) = {
+            let mut tasks = self.inner.tasks.lock().unwrap();
+            let entry = tasks
+                .get_mut(id)
+                .ok_or("that download is no longer in your list")?;
+            if !entry.task.is_torrent() {
+                return Err("only torrents can be force-started".to_string());
+            }
+            if entry.moving {
+                return Err(
+                    "can't force-start while the file is being moved — let the move finish first"
+                        .to_string(),
+                );
+            }
+            if entry.task.status == TaskStatus::Completed {
+                return Err("that torrent has already finished".to_string());
+            }
+            let next = !entry.task.force_start;
+            entry.task.force_start = next;
+            entry.task.error = None;
+            entry.task.updated_at = now_ms();
+            match &entry.control {
+                // Running (incl. stalled): push the flag live; the poll loop reacts.
+                Some(control) => {
+                    control.set_force(next);
+                    (entry.task.clone(), false)
+                }
+                // Stopped and turning on: queue it — pump starts it past the limit.
+                None if next => {
+                    entry.task.status = TaskStatus::Queued;
+                    (entry.task.clone(), true)
+                }
+                None => (entry.task.clone(), false),
+            }
+        };
+        self.persist_emit(&task);
+        if start {
+            Inner::pump(self.inner.clone());
+        }
         Ok(())
     }
 
@@ -1429,8 +1477,29 @@ impl Inner {
     }
 
     /// Start queued tasks until the concurrency limit is reached. A limit of 0
-    /// means unlimited — every queued task starts.
+    /// means unlimited — every queued task starts. Force-started tasks run first and
+    /// ignore the limit.
     fn pump(inner: Arc<Inner>) {
+        // Force-started tasks bypass the concurrency limit entirely.
+        loop {
+            let next = {
+                let tasks = inner.tasks.lock().unwrap();
+                tasks
+                    .values()
+                    .filter(|e| {
+                        e.task.status == TaskStatus::Queued
+                            && e.control.is_none()
+                            && e.task.force_start
+                    })
+                    .min_by_key(|e| e.task.created_at)
+                    .map(|e| e.task.id.clone())
+            };
+            match next {
+                Some(id) => Inner::start(inner.clone(), id),
+                None => break,
+            }
+        }
+
         let max = inner.settings.lock().unwrap().max_concurrent;
         let unlimited = max == 0;
         while unlimited || inner.running_count() < max {
@@ -1471,6 +1540,7 @@ impl Inner {
                 return;
             }
             let control = Control::new();
+            control.set_force(entry.task.force_start);
             entry.control = Some(control.clone());
             entry.task.status = TaskStatus::Connecting;
             entry.task.error = None;

@@ -197,6 +197,7 @@ pub fn run() {
             commands::pause_download,
             commands::resume_download,
             commands::start_seeding,
+            commands::force_start,
             commands::cancel_download,
             commands::remove_download,
             commands::delete_download,
