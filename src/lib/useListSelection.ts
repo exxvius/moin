@@ -190,6 +190,9 @@ export function useListSelection({
         if (!dragging) {
           dragging = true;
           document.body.style.userSelect = "none";
+          // Signals the cursor-glow fx to stand down (its per-row gradient repaint
+          // is what made dragging lag) while the marquee owns the pointer.
+          document.body.classList.add("dragging");
           cardBoxes = Array.from(
             container.querySelectorAll<HTMLElement>(".dl-card"),
           )
@@ -205,6 +208,7 @@ export function useListSelection({
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
         document.body.style.userSelect = "";
+        document.body.classList.remove("dragging");
         if (raf) cancelAnimationFrame(raf);
         if (dragging) {
           setMarquee(null);

@@ -279,7 +279,7 @@ impl Task {
 
 /// A lightweight progress tick during an active download. Emitted often, so it
 /// carries only what the bars need — not the whole [`Task`].
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TaskProgress {
     pub id: String,
     pub received: u64,

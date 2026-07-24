@@ -2507,15 +2507,17 @@
   left: 0;
   width: calc(var(--p, 0) * 100%);
   --glow-fade: clamp(0, (1 - var(--p, 0)) * 100, 1);
-  /* Growing the painted region (not a mask) lets blur() bloom into a soft halo
-     instead of being re-clipped to a hard box. */
+  /* A soft halo over the filled region. The blur is rasterized once (the painted
+     region is a fixed 100% of the fill), and only opacity pulses — so the cycle
+     runs on the compositor instead of re-blurring a growing box every frame. */
   background-image: linear-gradient(90deg, transparent, var(--bar-c));
   background-repeat: no-repeat;
   background-position: left center;
-  background-size: 0% 100%;
+  background-size: 100% 100%;
   filter: blur(6px);
   pointer-events: none;
   opacity: 0;
+  will-change: opacity;
   /* Track the fill's width at the same constant rate so the glow travels with
      it instead of snapping ahead. */
   transition: width var(--duration) linear;
@@ -2532,17 +2534,14 @@
 }
 @keyframes bar-pulse {
   0% {
-    background-size: 0% 100%;
     opacity: 0;
     animation-timing-function: cubic-bezier(0.2, 0.9, 0.3, 1);
   }
   32% {
-    background-size: 100% 100%;
     opacity: calc(var(--glow-fade) * 0.72);
     animation-timing-function: cubic-bezier(0.5, 0, 1, 1);
   }
   100% {
-    background-size: 100% 100%;
     opacity: 0;
   }
 }

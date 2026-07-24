@@ -403,12 +403,7 @@ function reorderWithCooldown(
   return result as string[];
 }
 
-interface DownloadsViewProps {
-  /** Slide rows when the sort reorders (off = they jump into place). */
-  animateReorder: boolean;
-}
-
-export function DownloadsView({ animateReorder }: DownloadsViewProps) {
+export function DownloadsView() {
   const store = useStore();
   // Multi-select status filter. "all" is a reset: picking it clears the rest;
   // picking any specific status drops "all". Never empty (falls back to "all").
@@ -474,27 +469,40 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
       return next.size === 0 ? new Set<string>([""]) : next;
     });
 
-  const hiddenCats = new Set(
-    store.categories.filter((c) => c.hidden_from_all).map((c) => c.id),
+  const hiddenCats = useMemo(
+    () =>
+      new Set(
+        store.categories.filter((c) => c.hidden_from_all).map((c) => c.id),
+      ),
+    [store.categories],
   );
-  const matchesStatus = (t: Task) =>
-    [...statusSel].some((id) => FILTER_MAP[id]?.match(t));
-  const matchesCategory = (t: Task) => {
-    // "All categories" shows everything but a hidden-from-all category's downloads
-    // (uncategorized always shows). A specific pick is the union of those chosen.
-    if (categorySel.has("")) {
-      return t.category == null || !hiddenCats.has(t.category);
-    }
-    if (t.category == null) return categorySel.has("none");
-    return categorySel.has(t.category);
-  };
-  const rows = store.all.filter(
-    (t) =>
-      matchesStatus(t) &&
-      matchesCategory(t) &&
-      (q === "" || t.filename.toLowerCase().includes(q)),
+  // Filtering + sorting are the list's heaviest per-render work, so they're
+  // memoized on the inputs that actually change the result. A re-render for a
+  // local reason (selection sweep, hover, open menu) reuses them untouched;
+  // only a data tick or a filter/sort change recomputes.
+  const rows = useMemo(() => {
+    const matchesStatus = (t: Task) =>
+      [...statusSel].some((id) => FILTER_MAP[id]?.match(t));
+    const matchesCategory = (t: Task) => {
+      // "All categories" shows everything but a hidden-from-all category's
+      // downloads (uncategorized always shows). A specific pick is the union.
+      if (categorySel.has("")) {
+        return t.category == null || !hiddenCats.has(t.category);
+      }
+      if (t.category == null) return categorySel.has("none");
+      return categorySel.has(t.category);
+    };
+    return store.all.filter(
+      (t) =>
+        matchesStatus(t) &&
+        matchesCategory(t) &&
+        (q === "" || t.filename.toLowerCase().includes(q)),
+    );
+  }, [store.all, statusSel, categorySel, hiddenCats, q]);
+  const sorted = useMemo(
+    () => sortRows(rows, sortStack, store.speeds),
+    [rows, sortStack, store.speeds],
   );
-  const sorted = sortRows(rows, sortStack, store.speeds);
 
   // Apply the reorder cooldown: rows that just moved hold their slot for a beat
   // so the list doesn't churn as live values cross. A sort-criteria change resets
@@ -513,7 +521,7 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
     movedAtRef.current,
     performance.now(),
   );
-  const byId = new Map(rows.map((t) => [t.id, t]));
+  const byId = useMemo(() => new Map(rows.map((t) => [t.id, t])), [rows]);
   const displayed = displayIds
     .map((id) => byId.get(id))
     .filter((t): t is Task => t != null);
@@ -556,25 +564,37 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   const topSpacer = offsetOf(vStart);
   const bottomSpacer = Math.max(0, contentH - offsetOf(vEnd));
 
-  const counts: Record<FilterId, number> = {
-    all: 0,
-    active: 0,
-    seeding: 0,
-    paused: 0,
-    done: 0,
-    issues: 0,
-    archived: 0,
-  };
-  for (const t of store.all) for (const f of FILTERS) if (f.match(t)) counts[f.id]++;
+  // The status-bar/toolbar aggregates depend only on the task set (and speeds for
+  // the total), so they're memoized too — a progress tick recomputes them, a
+  // selection sweep doesn't.
+  const counts = useMemo<Record<FilterId, number>>(() => {
+    const c: Record<FilterId, number> = {
+      all: 0,
+      active: 0,
+      seeding: 0,
+      paused: 0,
+      done: 0,
+      issues: 0,
+      archived: 0,
+    };
+    for (const t of store.all) for (const f of FILTERS) if (f.match(t)) c[f.id]++;
+    return c;
+  }, [store.all]);
 
-  const stats = computeStats(store.all);
-  const totalSpeed = store.all.reduce(
-    (sum, t) => sum + (t.status === "downloading" ? store.speeds[t.id] ?? 0 : 0),
-    0,
+  const stats = useMemo(() => computeStats(store.all), [store.all]);
+  const totalSpeed = useMemo(
+    () =>
+      store.all.reduce(
+        (sum, t) =>
+          sum + (t.status === "downloading" ? store.speeds[t.id] ?? 0 : 0),
+        0,
+      ),
+    [store.all, store.speeds],
   );
-  const downloadingCount = store.all.filter(
-    (t) => t.status === "downloading",
-  ).length;
+  const downloadingCount = useMemo(
+    () => store.all.filter((t) => t.status === "downloading").length,
+    [store.all],
+  );
 
   // Show the archive-only columns only when Archived is the single active filter;
   // mixed with others, the normal live columns stay.
@@ -615,7 +635,6 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
   const listRef = useRef<HTMLDivElement>(null);
   // The list is windowed (only visible rows mount), so the old FLIP slide over
   // every card no longer applies — reorders just re-place within the window.
-  void animateReorder;
 
   // Reflect the viewport's scroll offset into state so the window recomputes as it
   // scrolls (SmoothScroll fires this on every scroll).
@@ -668,7 +687,10 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
 
   // The ghost layer draws each highlighted row's glow outside the clipped list
   // so it can spill past the sides. It tracks the rows on its own.
-  const taskById = new Map(store.all.map((t) => [t.id, t]));
+  const taskById = useMemo(
+    () => new Map(store.all.map((t) => [t.id, t])),
+    [store.all],
+  );
   const toneOf = (id: string): string | null => {
     const t = taskById.get(id);
     if (!t) return null;
@@ -1213,6 +1235,7 @@ export function DownloadsView({ animateReorder }: DownloadsViewProps) {
                 viewportRef={listRef}
                 selectedIds={sel.selected}
                 toneOf={toneOf}
+                frozen={sel.marquee != null}
               />
             }
             header={

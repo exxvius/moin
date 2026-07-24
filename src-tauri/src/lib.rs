@@ -30,6 +30,12 @@ struct AppEmitter {
     /// as a single batched event on a timer so hundreds of per-torrent ticks a
     /// second collapse into a few IPC messages — flat cost at any torrent count.
     progress: Arc<Mutex<HashMap<String, TaskProgress>>>,
+    /// The last reading actually sent to the UI, per task. A poll that reports the
+    /// same numbers again is dropped here instead of buffered — with many idle or
+    /// seeding torrents re-reporting an unchanged tick several times a second, the
+    /// UI would otherwise re-render (and spread its whole task map) for no visible
+    /// change, which is the main driver of the renderer's memory growth over time.
+    last_sent: Arc<Mutex<HashMap<String, TaskProgress>>>,
 }
 
 impl Emitter for AppEmitter {
@@ -37,6 +43,12 @@ impl Emitter for AppEmitter {
         let _ = self.app.emit(events::TASK_ADDED, task);
     }
     fn progress(&self, p: &TaskProgress) {
+        // Skip a reading identical to the one the UI already holds.
+        if let Ok(last) = self.last_sent.lock() {
+            if last.get(&p.id) == Some(p) {
+                return;
+            }
+        }
         if let Ok(mut buf) = self.progress.lock() {
             buf.insert(p.id.clone(), p.clone());
         }
@@ -45,6 +57,11 @@ impl Emitter for AppEmitter {
         let _ = self.app.emit(events::TASK_UPDATED, task);
     }
     fn removed(&self, id: &str) {
+        // Drop the dedup record so the map doesn't retain gone tasks, and so a
+        // re-added id starts fresh.
+        if let Ok(mut last) = self.last_sent.lock() {
+            last.remove(id);
+        }
         let _ = self.app.emit(events::TASK_REMOVED, id);
     }
 }
@@ -52,7 +69,11 @@ impl Emitter for AppEmitter {
 /// Drain the buffered progress ticks on a timer and emit them as one event. Runs
 /// on Tauri's own runtime so it's always active (never gated on capturing the
 /// engine's runtime handle), which also means the buffer can't grow unbounded.
-fn spawn_progress_flusher(app: AppHandle, buf: Arc<Mutex<HashMap<String, TaskProgress>>>) {
+fn spawn_progress_flusher(
+    app: AppHandle,
+    buf: Arc<Mutex<HashMap<String, TaskProgress>>>,
+    last_sent: Arc<Mutex<HashMap<String, TaskProgress>>>,
+) {
     tauri::async_runtime::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_millis(PROGRESS_FLUSH_MS));
         loop {
@@ -64,6 +85,12 @@ fn spawn_progress_flusher(app: AppHandle, buf: Arc<Mutex<HashMap<String, TaskPro
                 }
                 b.drain().map(|(_, v)| v).collect()
             };
+            // Record what we're sending so a later identical reading is dropped.
+            if let Ok(mut last) = last_sent.lock() {
+                for p in &batch {
+                    last.insert(p.id.clone(), p.clone());
+                }
+            }
             let _ = app.emit(events::TASK_PROGRESS_BATCH, &batch);
         }
     });
@@ -110,16 +137,18 @@ pub fn run() {
             tracing::info!("moin starting, data dir: {}", data_dir.display());
 
             let progress_buf = Arc::new(Mutex::new(HashMap::new()));
+            let last_sent = Arc::new(Mutex::new(HashMap::new()));
             let emitter = Arc::new(AppEmitter {
                 app: app.handle().clone(),
                 progress: progress_buf.clone(),
+                last_sent: last_sent.clone(),
             });
             let engine = Engine::new(data_dir, emitter)
                 .map_err(|e| format!("failed to start the download engine: {e}"))?;
 
             // Coalesce progress ticks into one periodic event so IPC stays flat as
             // the number of active torrents grows (and the buffer never piles up).
-            spawn_progress_flusher(app.handle().clone(), progress_buf);
+            spawn_progress_flusher(app.handle().clone(), progress_buf, last_sent);
 
             // Start the loopback RPC server the browser extension talks to. It
             // needs the OS Downloads folder as the fallback destination (the same

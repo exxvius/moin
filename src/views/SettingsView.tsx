@@ -18,8 +18,6 @@ const RQBIT_URL = "https://github.com/ikatson/rqbit";
 interface Props {
   accent: Accent;
   setAccent: (a: Accent) => void;
-  reorderAnim: boolean;
-  setReorderAnim: (v: boolean) => void;
 }
 
 // 0 = unlimited; the rest are sensible concurrency caps.
@@ -77,12 +75,7 @@ function secondsLabel(n: number): string {
   return `${n} seconds`;
 }
 
-export function SettingsView({
-  accent,
-  setAccent,
-  reorderAnim,
-  setReorderAnim,
-}: Props) {
+export function SettingsView({ accent, setAccent }: Props) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [backends, setBackends] = useState<BackendInfo[]>([]);
   const [tool, setTool] = useState<ToolStatus | null>(null);
@@ -264,20 +257,6 @@ export function SettingsView({
           />
         </div>
 
-        <div className="setting-row">
-          <div>
-            <div className="setting-label">Reorder animation</div>
-            <div className="dim">
-              Slide rows into place when the sort order changes. Turn off if
-              live-sorted downloads shuffle too much.
-            </div>
-          </div>
-          <Switch
-            checked={reorderAnim}
-            ariaLabel="Reorder animation"
-            onChange={setReorderAnim}
-          />
-        </div>
       </div>
 
       <div className="card">

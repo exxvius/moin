@@ -44,6 +44,9 @@ interface Props {
   selectedIds: Set<string>;
   /** The glow tone (a CSS color, e.g. "var(--warn)") for a row, or null. */
   toneOf: (id: string) => string | null;
+  /** Pause the rAF re-placement (e.g. during a marquee drag, when the rows don't
+   *  move and the per-frame querySelectorAll + rect reads are pure overhead). */
+  frozen?: boolean;
 }
 
 function sameGhosts(a: Ghost[], b: Ghost[]): boolean {
@@ -65,7 +68,12 @@ function sameGhosts(a: Ghost[], b: Ghost[]): boolean {
   return true;
 }
 
-export function GhostGlowLayer({ viewportRef, selectedIds, toneOf }: Props) {
+export function GhostGlowLayer({
+  viewportRef,
+  selectedIds,
+  toneOf,
+  frozen = false,
+}: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [ghosts, setGhosts] = useState<Ghost[]>([]);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -147,6 +155,9 @@ export function GhostGlowLayer({ viewportRef, selectedIds, toneOf }: Props) {
   // itself once every ghost is gone.
   const active = selectedIds.size > 0 || hoveredId !== null;
   useEffect(() => {
+    // While a drag owns the pointer the rows are static, so leave the current
+    // ghosts in place and skip the per-frame querySelectorAll + rect reads.
+    if (frozen) return;
     if (!active && ghostsRef.current.length === 0) return;
     let raf = 0;
     const loop = () => {
@@ -161,7 +172,7 @@ export function GhostGlowLayer({ viewportRef, selectedIds, toneOf }: Props) {
     return () => {
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [active, tick]);
+  }, [active, tick, frozen]);
 
   return (
     <div className="dl-ghost-layer" ref={rootRef} aria-hidden>

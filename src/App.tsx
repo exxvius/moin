@@ -14,7 +14,6 @@ import { StoreProvider } from "./lib/store";
 import { initCursorFx } from "./lib/cursor";
 import { useTheme } from "./lib/theme";
 import { useAccent } from "./lib/accent";
-import { useReorderAnim } from "./lib/prefs";
 
 type View = "downloads" | "categories" | "settings";
 
@@ -30,11 +29,24 @@ const NAV: {
 function Shell() {
   const [theme, toggleTheme] = useTheme();
   const [accent, setAccent] = useAccent();
-  const [reorderAnim, setReorderAnim] = useReorderAnim();
   const [view, setView] = useState<View>("downloads");
 
   // Cursor-proximity border glow on cards + download rows.
   useEffect(() => initCursorFx(), []);
+
+  // Halt looping animations while the window is hidden/minimized/occluded, so the
+  // compositor isn't repainting the lava blobs and live progress bars for a
+  // window nobody can see (and their promoted layers can be freed).
+  useEffect(() => {
+    const sync = () =>
+      document.documentElement.toggleAttribute(
+        "data-anim-paused",
+        document.hidden,
+      );
+    sync();
+    document.addEventListener("visibilitychange", sync);
+    return () => document.removeEventListener("visibilitychange", sync);
+  }, []);
 
   // Suppress the webview's native right-click menu; we use our own.
   useEffect(() => {
@@ -99,15 +111,10 @@ function Shell() {
       </aside>
 
       <main className="main">
-        {view === "downloads" && <DownloadsView animateReorder={reorderAnim} />}
+        {view === "downloads" && <DownloadsView />}
         {view === "categories" && <CategoriesView />}
         {view === "settings" && (
-          <SettingsView
-            accent={accent}
-            setAccent={setAccent}
-            reorderAnim={reorderAnim}
-            setReorderAnim={setReorderAnim}
-          />
+          <SettingsView accent={accent} setAccent={setAccent} />
         )}
       </main>
     </div>

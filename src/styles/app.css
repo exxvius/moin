@@ -1016,16 +1016,16 @@
   width: calc(var(--p) * 100%);
   --glow-fade: clamp(0, (1 - var(--p)) * 100, 1);
   background-image: linear-gradient(90deg, transparent, var(--bar-c));
-  /* The reveal is driven by background-size growing from the left toward the tip
-     — NOT a mask. A mask (or clip) would re-clip the blurred result back into a
-     hard box; animating the painted region instead lets blur() bloom freely for
-     a soft, diffuse halo. */
+  /* A soft halo over the fill. The painted region is a fixed 100% of the fill so
+     blur() is rasterized once; only opacity pulses, keeping the cycle on the
+     compositor instead of re-blurring a growing box every frame. */
   background-repeat: no-repeat;
   background-position: left center;
-  background-size: 0% 100%;
+  background-size: 100% 100%;
   filter: blur(6px);
   pointer-events: none;
   opacity: 0;
+  will-change: opacity;
   /* Fast start that decelerates into the end (same 1.8s cycle). */
   animation: bar-pulse 1.8s cubic-bezier(0.2, 0.9, 0.3, 1) infinite;
 }
@@ -1043,19 +1043,16 @@
    fades out as progress nears 100%. */
 @keyframes bar-pulse {
   0% {
-    background-size: 0% 100%;
     opacity: 0;
     /* Reveal: fast start, decelerating into the peak. */
     animation-timing-function: cubic-bezier(0.2, 0.9, 0.3, 1);
   }
   32% {
-    background-size: 100% 100%;
     opacity: calc(var(--glow-fade) * 0.72);
     /* Fade-out: eased (slow) at the start, accelerating toward invisible. */
     animation-timing-function: cubic-bezier(0.5, 0, 1, 1);
   }
   100% {
-    background-size: 100% 100%;
     opacity: 0;
   }
 }

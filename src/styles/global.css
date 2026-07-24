@@ -39,6 +39,15 @@ textarea,
   --par-y: 0;
 }
 
+/* When the window is hidden/occluded (see the visibilitychange listener in App),
+   halt every looping animation so the compositor stops churning and promoted
+   layers (the lava blobs, live bars) can be released while nobody's looking. */
+:root[data-anim-paused] *,
+:root[data-anim-paused] *::before,
+:root[data-anim-paused] *::after {
+  animation-play-state: paused !important;
+}
+
 /* Ambient colour bends — four soft blobs, each with a radius larger than half
    the screen (vmax units) so they always overlap and interact in the middle,
    regardless of window size. Each drifts and swells on its own long loop, and
@@ -54,11 +63,14 @@ textarea,
 }
 .lava i {
   position: absolute;
-  width: 140vmax;
-  height: 140vmax;
-  margin: -70vmax 0 0 -70vmax; /* center the blob on its left/top anchor */
+  /* Kept large enough to always overlap in the middle, but no bigger — each blob
+     is its own compositor layer while animating, and the backing store scales
+     with its size (140vmax was ~50 MB of GPU texture apiece). No permanent
+     will-change, so a paused/hidden layer (see [data-anim-paused]) can be freed. */
+  width: 100vmax;
+  height: 100vmax;
+  margin: -50vmax 0 0 -50vmax; /* center the blob on its left/top anchor */
   border-radius: 50%;
-  will-change: transform, translate;
   transition: translate 600ms cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 .lava i:nth-child(1) {
