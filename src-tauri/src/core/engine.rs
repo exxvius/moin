@@ -44,6 +44,10 @@ struct Entry {
     /// A category move requested while the task was still running: it's pausing,
     /// and once it stops the move begins instead of leaving it paused.
     pending_move: Option<PendingMove>,
+    /// A force-recheck requested while the task was still running: once it stops it's
+    /// re-queued (rather than settled) so it re-adds and, with its fastresume cleared,
+    /// verifies its data against disk.
+    pending_recheck: bool,
     /// True while the file is being relocated (status `Moving`). Guards the task
     /// against pause/resume/cancel and defers a remove until the move finishes.
     moving: bool,
@@ -65,6 +69,7 @@ impl Entry {
             control: None,
             pending_archive: None,
             pending_move: None,
+            pending_recheck: false,
             moving: false,
         }
     }
@@ -747,6 +752,65 @@ impl Engine {
         if start {
             Inner::pump(self.inner.clone());
         }
+        Ok(())
+    }
+
+    /// Force a torrent to re-verify its data against disk. Clears the fastresume
+    /// bitfield (by detaching from the session) and re-queues, so the re-add does a
+    /// full checksum pass. A running torrent is stopped first (without discarding its
+    /// data), then re-checked; its files are always kept.
+    pub async fn force_recheck(&self, id: &str) -> Result<(), String> {
+        let (info_hash, was_running) = {
+            let mut tasks = self.inner.tasks.lock().unwrap();
+            let entry = tasks
+                .get_mut(id)
+                .ok_or("that download is no longer in your list")?;
+            if !entry.task.is_torrent() {
+                return Err("only torrents can be re-checked".to_string());
+            }
+            if entry.moving {
+                return Err(
+                    "can't re-check while the file is being moved — let the move finish first"
+                        .to_string(),
+                );
+            }
+            let hash = entry
+                .task
+                .info_hash
+                .clone()
+                .ok_or("this torrent has no info hash yet")?;
+            // Set the intent before detaching so, if detaching stops the run loop, it
+            // re-queues for a recheck instead of settling as canceled.
+            if entry.control.is_some() {
+                entry.pending_recheck = true;
+                (hash, true)
+            } else {
+                (hash, false)
+            }
+        };
+
+        // Detach (keeps files) — this releases and removes the fastresume bitfield —
+        // then belt-and-suspenders delete any bitfield left on disk.
+        let _ = self.remove_torrent_from_session(&info_hash).await;
+        torrent::clear_resume(&self.inner.data_dir, &info_hash);
+
+        if was_running {
+            return Ok(()); // `finish` re-queues via pending_recheck
+        }
+        // Not running: re-queue now for the recheck.
+        let task = {
+            let mut tasks = self.inner.tasks.lock().unwrap();
+            let Some(entry) = tasks.get_mut(id) else {
+                return Ok(());
+            };
+            entry.task.status = TaskStatus::Queued;
+            entry.task.error = None;
+            entry.task.received = 0; // the check recomputes what's actually on disk
+            entry.task.updated_at = now_ms();
+            entry.task.clone()
+        };
+        self.persist_emit(&task);
+        Inner::pump(self.inner.clone());
         Ok(())
     }
 
@@ -1903,6 +1967,7 @@ impl Inner {
         enum Post {
             Archive(Task, bool),
             Move(PendingMove),
+            Requeue(Task),
             Settle(Task),
         }
 
@@ -1912,7 +1977,17 @@ impl Inner {
                 return;
             };
             entry.control = None;
-            if let Some(delete_file) = entry.pending_archive.take() {
+            if std::mem::take(&mut entry.pending_recheck) {
+                // Force-recheck: re-queue (the caller cleared the fastresume), don't
+                // settle or purge. The re-add does a full on-disk check.
+                entry.pending_archive = None;
+                entry.pending_move = None;
+                entry.task.status = TaskStatus::Queued;
+                entry.task.error = None;
+                entry.task.received = 0;
+                entry.task.updated_at = now_ms();
+                Post::Requeue(entry.task.clone())
+            } else if let Some(delete_file) = entry.pending_archive.take() {
                 entry.pending_move = None; // a pending remove wins over a move
                                            // Stop it being re-queued, but hold off on `archived` until any
                                            // requested file delete actually succeeds — see the Archive handler,
@@ -2040,6 +2115,13 @@ impl Inner {
             }
             Post::Move(pm) => {
                 Inner::begin_move(inner, id, pm.category, pm.target_dir);
+            }
+            Post::Requeue(task) => {
+                // Force-recheck: persist the queued state and let the queue re-add it
+                // (fastresume already cleared, so it re-checks against disk).
+                let _ = inner.store.lock().unwrap().upsert(&task);
+                inner.emitter.updated(&task);
+                Inner::pump(inner);
             }
             Post::Settle(task) => {
                 if task.status == TaskStatus::Canceled {

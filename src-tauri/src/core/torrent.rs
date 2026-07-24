@@ -700,6 +700,18 @@ pub fn prune_store(data_dir: &Path, keep: &HashSet<String>) {
     }
 }
 
+/// Delete the persisted fastresume bitfield for an info hash, so the next add does
+/// a full on-disk check instead of trusting the saved have-set — the mechanism
+/// behind a force-recheck. A no-op if there's no bitfield (or the torrent is still
+/// in the session holding it mmap'd; the caller detaches first).
+pub fn clear_resume(data_dir: &Path, info_hash: &str) {
+    let bitv = data_dir
+        .join("torrent")
+        .join("session")
+        .join(format!("{info_hash}.bitv"));
+    let _ = std::fs::remove_file(bitv);
+}
+
 /// The cache path for a resolved `.torrent`, under `<data>/torrent/meta`.
 pub fn meta_path(data_dir: &Path, info_hash: &str) -> PathBuf {
     data_dir

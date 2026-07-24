@@ -44,6 +44,7 @@ export const api = {
   resumeDownload: (id: string) => invoke<void>("resume_download", { id }),
   startSeeding: (id: string) => invoke<void>("start_seeding", { id }),
   forceStart: (id: string) => invoke<void>("force_start", { id }),
+  forceRecheck: (id: string) => invoke<void>("force_recheck", { id }),
   cancelDownload: (id: string) => invoke<void>("cancel_download", { id }),
   removeDownload: (id: string) => invoke<void>("remove_download", { id }),
   deleteDownload: (id: string) => invoke<void>("delete_download", { id }),

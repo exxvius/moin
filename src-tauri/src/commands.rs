@@ -143,6 +143,11 @@ pub async fn force_start(state: State<'_, AppState>, id: String) -> Result<(), S
 }
 
 #[tauri::command]
+pub async fn force_recheck(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.engine.force_recheck(&id).await
+}
+
+#[tauri::command]
 pub async fn cancel_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
     state.engine.cancel(&id).await
 }

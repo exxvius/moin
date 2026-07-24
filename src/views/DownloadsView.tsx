@@ -906,6 +906,13 @@ export function DownloadsView() {
         onClick: () => runAction(store.forceStart(task.id)),
       });
     }
+    // Any torrent with data on disk can be re-verified against it.
+    if (task.kind === "torrent") {
+      items.push({
+        label: "Force recheck",
+        onClick: () => runAction(store.forceRecheck(task.id)),
+      });
+    }
     if (task.status === "completed" || task.status === "seeding") {
       if (task.kind === "torrent") {
         const done = (task.files ?? []).filter((f) => f.selected);
@@ -1075,6 +1082,14 @@ export function DownloadsView() {
       items.push({
         label: `Start seeding ${seedable.length}`,
         onClick: () => runAll(seedable.map((t) => t.id), store.startSeeding),
+      });
+    }
+    const recheckable = tasks.filter((t) => t.kind === "torrent");
+    if (recheckable.length) {
+      items.push({
+        label: `Force recheck ${recheckable.length}`,
+        onClick: () =>
+          runAll(recheckable.map((t) => t.id), store.forceRecheck),
       });
     }
     const mv = moveEntry();
