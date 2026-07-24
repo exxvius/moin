@@ -1231,8 +1231,15 @@ impl Engine {
                 let Some(entry) = tasks.get_mut(&id) else {
                     continue;
                 };
+                // Already relocating: record the new target as the pending move so the
+                // latest command wins — `finish_move` chains into it once the current
+                // move lands, instead of dropping the request.
                 if entry.moving {
-                    continue; // already relocating
+                    entry.pending_move = Some(PendingMove {
+                        category: category.clone(),
+                        target_dir: target_dir.clone(),
+                    });
+                    continue;
                 }
                 match &entry.control {
                     Some(control) => {
@@ -1463,13 +1470,19 @@ impl Inner {
     }
 
     fn running_count(&self) -> usize {
-        // A seeding torrent keeps its run loop alive but isn't using a download
-        // slot, so it mustn't count against the concurrency limit.
+        // A seeding torrent keeps its run loop alive but isn't using a download slot.
+        // A stalled torrent is getting no data, so it releases its slot too — a
+        // queued torrent that could actually download shouldn't wait behind it. Both
+        // keep their run loop; they just don't count against the concurrency limit.
         self.tasks
             .lock()
             .unwrap()
             .values()
-            .filter(|e| e.control.is_some() && e.task.status != TaskStatus::Seeding)
+            .filter(|e| {
+                e.control.is_some()
+                    && e.task.status != TaskStatus::Seeding
+                    && e.task.status != TaskStatus::Stalled
+            })
             .count()
     }
 
@@ -1651,7 +1664,7 @@ impl Inner {
                 let now = Instant::now();
 
                 // Snapshot the task + decide what to do while briefly holding locks.
-                let (task, newly_started, newly_seeding, do_emit, do_persist, speed) = {
+                let (task, newly_started, newly_seeding, frees_slot, do_emit, do_persist, speed) = {
                     let mut st = state.lock().unwrap();
                     let mut tasks = inner.tasks.lock().unwrap();
                     let Some(entry) = tasks.get_mut(&id) else {
@@ -1755,12 +1768,17 @@ impl Inner {
                         st.last_persist = now;
                     }
 
+                    // Seeding and Stalled don't hold a download slot, so a transition
+                    // into either frees one — pump so a queued task can start.
+                    let frees_slot = matches!(status, TaskStatus::Seeding | TaskStatus::Stalled)
+                        && !matches!(prev_status, TaskStatus::Seeding | TaskStatus::Stalled);
                     let newly_seeding =
                         status == TaskStatus::Seeding && prev_status != TaskStatus::Seeding;
                     (
                         entry.task.clone(),
                         newly_started,
                         newly_seeding,
+                        frees_slot,
                         do_emit,
                         do_persist,
                         st.speed,
@@ -1775,6 +1793,9 @@ impl Inner {
                     // a full update and let the next queued download start.
                     inner.emitter.updated(&task);
                     let _ = inner.store.lock().unwrap().upsert(&task);
+                    Inner::pump(inner.clone());
+                } else if frees_slot {
+                    // Slipped into Stalled — free the slot for a queued task.
                     Inner::pump(inner.clone());
                 }
                 if do_emit {
@@ -2177,7 +2198,7 @@ impl Inner {
     /// remove requested mid-move is honored here.
     fn finish_move(inner: Arc<Inner>, job: MoveJob, result: Result<(), String>) {
         let mut resume = false;
-        let (task, archive) = {
+        let (task, archive, next_move) = {
             let mut tasks = inner.tasks.lock().unwrap();
             let Some(entry) = tasks.get_mut(&job.id) else {
                 return;
@@ -2192,6 +2213,8 @@ impl Inner {
             }
 
             if let Some(delete_file) = entry.pending_archive.take() {
+                // A remove/delete requested during the move wins over any queued move.
+                entry.pending_move = None;
                 entry.task.archived = true;
                 entry.task.status = if job.was_completed {
                     TaskStatus::Completed
@@ -2199,7 +2222,13 @@ impl Inner {
                     TaskStatus::Canceled
                 };
                 entry.task.updated_at = now_ms();
-                (entry.task.clone(), Some(delete_file))
+                (entry.task.clone(), Some(delete_file), None)
+            } else if let Some(pm) = entry.pending_move.take() {
+                // A newer category change arrived mid-move — chain into it from the
+                // just-settled location so the latest command wins.
+                entry.task.error = None;
+                entry.task.updated_at = now_ms();
+                (entry.task.clone(), None, Some(pm))
             } else {
                 match &result {
                     Ok(()) => {
@@ -2222,7 +2251,7 @@ impl Inner {
                     }
                 }
                 entry.task.updated_at = now_ms();
-                (entry.task.clone(), None)
+                (entry.task.clone(), None, None)
             }
         };
 
@@ -2231,6 +2260,11 @@ impl Inner {
         }
         let _ = inner.store.lock().unwrap().upsert(&task);
         inner.emitter.updated(&task);
+        // Chain into the latest queued category change, if one arrived mid-move.
+        if let Some(pm) = next_move {
+            Inner::begin_move(inner, job.id, pm.category, pm.target_dir);
+            return;
+        }
         if resume {
             Inner::pump(inner);
         }
@@ -2356,6 +2390,25 @@ fn purge_files(task: &Task, delete_file: bool) {
 /// never removed. Returns an error if something couldn't be removed (e.g. a file
 /// or the folder is open in another program) so the caller can hold the delete.
 fn delete_torrent_files(task: &Task) -> Result<(), String> {
+    // Retry a few times: right after a torrent detaches — especially an aborted
+    // mid-add during a rapid start-then-delete — the OS can still hold a file handle
+    // for a beat, so the first delete fails ("in use"/"not empty") even though it'll
+    // succeed moments later. Cheap insurance against a transient failure leaving a
+    // stray errored task with un-deleted files.
+    let mut last = Ok(());
+    for attempt in 0..4 {
+        last = delete_torrent_files_once(task);
+        if last.is_ok() {
+            return Ok(());
+        }
+        if attempt < 3 {
+            std::thread::sleep(Duration::from_millis(150));
+        }
+    }
+    last
+}
+
+fn delete_torrent_files_once(task: &Task) -> Result<(), String> {
     let base = Path::new(&task.dest);
 
     // "Create subfolder" layout: moin made this folder exclusively for the torrent,
