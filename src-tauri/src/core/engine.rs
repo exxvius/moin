@@ -877,6 +877,12 @@ impl Engine {
                     entry.pending_archive = Some(delete_file);
                     true
                 } else {
+                    // Not running. If it's queued, take it out of the queue right now so
+                    // pump can't start it (re-adding to the session and re-writing the
+                    // files) during the delete below.
+                    if entry.task.status == TaskStatus::Queued {
+                        entry.task.status = TaskStatus::Canceled;
+                    }
                     false
                 }
             };
@@ -1565,10 +1571,17 @@ impl Inner {
         // Resolve the backend before flipping the task to Connecting, so the record
         // of which backend ran (persisted below) reflects the one that actually
         // handles the transfer — including any fallback from the user's pick.
+        // Only start a task that's still Queued and not archived. Between pump
+        // picking it and here, a concurrent archive/delete may have pulled it out of
+        // the queue — starting it anyway would re-add it to the session and re-write
+        // files that were just deleted.
+        let startable = |e: &Entry| {
+            e.control.is_none() && e.task.status == TaskStatus::Queued && !e.task.archived
+        };
         let kind = {
             let tasks = inner.tasks.lock().unwrap();
             match tasks.get(&id) {
-                Some(entry) if entry.control.is_none() => entry.task.kind,
+                Some(entry) if startable(entry) => entry.task.kind,
                 _ => return,
             }
         };
@@ -1579,7 +1592,7 @@ impl Inner {
             let Some(entry) = tasks.get_mut(&id) else {
                 return;
             };
-            if entry.control.is_some() {
+            if !startable(entry) {
                 return;
             }
             let control = Control::new();
