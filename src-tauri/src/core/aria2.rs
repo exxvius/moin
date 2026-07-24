@@ -574,6 +574,8 @@ fn default_net() -> TorrentNet {
         upnp: true,
         download_bps: None,
         upload_bps: None,
+        peer_connect_timeout: Some(Duration::from_secs(10)),
+        port_span: 20,
     }
 }
 

@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use librqbit::{
     limits::LimitsConfig, torrent_from_bytes, AddTorrent, AddTorrentOptions, AddTorrentResponse,
-    ByteBufOwned, Magnet, Session, SessionOptions, SessionPersistenceConfig, TorrentMetaV1Info,
+    ByteBufOwned, Magnet, PeerConnectionOptions, Session, SessionOptions, SessionPersistenceConfig,
+    TorrentMetaV1Info,
 };
 use tokio::sync::OnceCell;
 
@@ -28,11 +29,6 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// reachable peers would otherwise hang forever.
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// How long `add_torrent` may take before we give up. A magnet resolves its
-/// metadata from the swarm inside the add, so this bounds a peerless magnet
-/// instead of leaving the task wedged in "Connecting" forever.
-const ADD_TIMEOUT: Duration = Duration::from_secs(180);
-
 /// Wait until the control asks us to stop (Pause/Cancel), polling the shared
 /// atomic. Used to race a possibly-slow `add_torrent` so a stuck add stays
 /// cancellable — otherwise pause/cancel/remove do nothing until the add returns.
@@ -45,9 +41,6 @@ async fn wait_for_stop(control: &Control) -> Signal {
     }
 }
 
-/// How often to re-scrape the trackers for seeder/leecher counts.
-const SCRAPE_INTERVAL: Duration = Duration::from_secs(90);
-
 /// Aborts a spawned task when dropped, so the scrape loop stops the moment the
 /// download run returns (on any path).
 struct AbortGuard(tokio::task::JoinHandle<()>);
@@ -56,10 +49,6 @@ impl Drop for AbortGuard {
         self.0.abort();
     }
 }
-
-/// How many ports past the configured listen port to try if it's busy, so a
-/// taken port falls through to a neighbour instead of failing the whole session.
-const LISTEN_PORT_SPAN: u16 = 20;
 
 /// The config a session builds with before the engine's real settings are pushed
 /// in (which happens at startup, before any torrent runs). Mirrors the settings
@@ -71,6 +60,8 @@ fn default_net() -> TorrentNet {
         upnp: true,
         download_bps: None,
         upload_bps: None,
+        peer_connect_timeout: Some(Duration::from_secs(10)),
+        port_span: 20,
     }
 }
 
@@ -128,13 +119,17 @@ impl TorrentEngine {
                     // is the fork flag that keeps the persistent bitfield without the
                     // auto-restore. Deselected/removed torrents stay moin's call.
                     dont_restore_persisted: true,
-                    listen_port_range: Some(start..start.saturating_add(LISTEN_PORT_SPAN)),
+                    listen_port_range: Some(start..start.saturating_add(net.port_span.max(1))),
                     disable_dht: !net.dht,
                     enable_upnp_port_forwarding: net.upnp,
                     ratelimits: LimitsConfig {
                         download_bps: net.download_bps,
                         upload_bps: net.upload_bps,
                     },
+                    peer_opts: Some(PeerConnectionOptions {
+                        connect_timeout: net.peer_connect_timeout,
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 };
                 // The default output folder is always overridden per task; it just
@@ -392,7 +387,7 @@ impl TorrentEngine {
                     _ => Outcome::Canceled,
                 };
             }
-            resp = tokio::time::timeout(ADD_TIMEOUT, session.add_torrent(add, Some(add_opts))) => {
+            resp = tokio::time::timeout(opts.magnet_timeout, session.add_torrent(add, Some(add_opts))) => {
                 match resp {
                     Err(_) => {
                         return Outcome::Failed(
@@ -430,6 +425,7 @@ impl TorrentEngine {
         let scrape_state = Arc::new(std::sync::Mutex::new((0u32, 0u32)));
         let _scrape = {
             let state = scrape_state.clone();
+            let scrape_interval = opts.scrape_interval;
             let hash = handle.info_hash().0;
             let trackers: Vec<String> = handle
                 .shared()
@@ -443,7 +439,7 @@ impl TorrentEngine {
                     if let Some(c) = super::scrape::scrape_best(&client, &trackers, &hash).await {
                         *state.lock().unwrap() = (c.seeders, c.leechers);
                     }
-                    tokio::time::sleep(SCRAPE_INTERVAL).await;
+                    tokio::time::sleep(scrape_interval).await;
                 }
             }))
         };

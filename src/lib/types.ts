@@ -173,6 +173,21 @@ export interface Settings {
   torrent_upload_limit: number;
   /** How often (seconds) watched folders are scanned for dropped torrents. */
   watch_interval_secs: number;
+  /** Whether closing the window hides moin to the tray (keeping downloads and
+   *  seeding running) instead of quitting. */
+  close_to_tray: boolean;
+  /** Show an OS notification when a download finishes. */
+  notify_on_complete: boolean;
+  /** Add new downloads paused instead of starting them automatically. */
+  add_paused: boolean;
+  /** How long to wait for a magnet's metadata before giving up, in seconds. */
+  magnet_timeout_secs: number;
+  /** How often trackers are re-scraped for seeder/leecher counts, in seconds. */
+  scrape_interval_secs: number;
+  /** How long to wait on a peer's handshake before dropping it, in seconds. */
+  peer_connect_timeout_secs: number;
+  /** How many ports past the listen port to try if it's busy. */
+  torrent_port_span: number;
 }
 
 export interface BackendInfo {

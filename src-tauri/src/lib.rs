@@ -64,6 +64,18 @@ impl Emitter for AppEmitter {
         }
         let _ = self.app.emit(events::TASK_REMOVED, id);
     }
+    fn completed(&self, task: &Task) {
+        // The engine only calls this when the user has notifications on, so just
+        // show it. Best-effort — a denied permission or headless run is a no-op.
+        use tauri_plugin_notification::NotificationExt;
+        let _ = self
+            .app
+            .notification()
+            .builder()
+            .title("Download finished")
+            .body(&task.filename)
+            .show();
+    }
 }
 
 /// Drain the buffered progress ticks on a timer and emit them as one event. Runs

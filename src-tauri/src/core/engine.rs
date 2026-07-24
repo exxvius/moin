@@ -31,6 +31,10 @@ pub trait Emitter: Send + Sync + 'static {
     fn progress(&self, p: &TaskProgress);
     fn updated(&self, task: &Task);
     fn removed(&self, id: &str);
+    /// A download just finished (first time it reached a completed/seeding state).
+    /// The Tauri layer turns this into an OS notification. Default no-op so a
+    /// headless build (tests) can ignore it.
+    fn completed(&self, _task: &Task) {}
 }
 
 struct Entry {
@@ -222,6 +226,29 @@ impl Engine {
         out
     }
 
+    /// Whether any transfer is currently running — a download in flight or a
+    /// torrent seeding. Quitting would stop these (they resume next launch), so the
+    /// close handler uses this to decide whether to warn before quitting.
+    pub fn has_active_transfers(&self) -> bool {
+        self.inner
+            .tasks
+            .lock()
+            .unwrap()
+            .values()
+            .any(|e| e.control.is_some())
+    }
+
+    /// The status a freshly added download starts in: `Paused` when the user has
+    /// "add downloads paused" on (so it waits for a manual resume), else `Queued`
+    /// so the queue can start it.
+    fn initial_add_status(&self) -> TaskStatus {
+        if self.inner.settings.lock().unwrap().add_paused {
+            TaskStatus::Paused
+        } else {
+            TaskStatus::Queued
+        }
+    }
+
     /// Queue a direct HTTP download. Files it under `category` when given (a valid
     /// id), and lands it in that category's `save_dir` if it sets one — otherwise
     /// the passed `dir`.
@@ -270,6 +297,7 @@ impl Engine {
             .and_then(sanitize_filename)
             .unwrap_or_else(|| filename_from_url(&url));
         let now = now_ms();
+        let initial_status = self.initial_add_status();
 
         // Reserve a collision-free name while holding the registry lock, so two
         // adds of the same URL can't race onto the same file/.part.
@@ -284,7 +312,7 @@ impl Engine {
                 url,
                 filename,
                 dest,
-                status: TaskStatus::Queued,
+                status: initial_status,
                 total: None,
                 received: 0,
                 error: None,
@@ -657,6 +685,7 @@ impl Engine {
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let dest = dir.to_string_lossy().into_owned();
         let now = now_ms();
+        let initial_status = self.initial_add_status();
 
         let task = {
             let mut tasks = self.inner.tasks.lock().unwrap();
@@ -666,7 +695,7 @@ impl Engine {
                 url: stored_source,
                 filename: display,
                 dest,
-                status: TaskStatus::Queued,
+                status: initial_status,
                 total,
                 received: 0,
                 error: None,
@@ -1918,6 +1947,14 @@ impl Inner {
         );
     }
 
+    /// Fire a completion notification for a just-finished download, when the user
+    /// has "notify on complete" on. Called once per task on its first finish.
+    fn notify_complete(inner: &Arc<Inner>, task: &Task) {
+        if inner.settings.lock().unwrap().notify_on_complete {
+            inner.emitter.completed(task);
+        }
+    }
+
     /// Start queued tasks until the concurrency limit is reached. A limit of 0
     /// means unlimited — every queued task starts. Force-started tasks run first and
     /// ignore the limit.
@@ -2044,6 +2081,8 @@ impl Inner {
                 stall_timeout: Duration::from_secs(s.stall_timeout_secs),
                 seed_ratio_limit,
                 seed_time_limit,
+                magnet_timeout: Duration::from_secs(s.magnet_timeout_secs.max(1)),
+                scrape_interval: Duration::from_secs(s.scrape_interval_secs.max(5)),
             }
         };
         let progress = Inner::make_progress(inner.clone(), id.clone());
@@ -2087,7 +2126,16 @@ impl Inner {
                 let now = Instant::now();
 
                 // Snapshot the task + decide what to do while briefly holding locks.
-                let (task, newly_started, newly_seeding, frees_slot, do_emit, do_persist, speed) = {
+                let (
+                    task,
+                    newly_started,
+                    newly_seeding,
+                    just_finished,
+                    frees_slot,
+                    do_emit,
+                    do_persist,
+                    speed,
+                ) = {
                     let mut st = state.lock().unwrap();
                     let mut tasks = inner.tasks.lock().unwrap();
                     let Some(entry) = tasks.get_mut(&id) else {
@@ -2146,6 +2194,12 @@ impl Inner {
                         entry.task.updated_at = now_ms();
                     }
                     // Record the completion time the first time it reaches seeding.
+                    // Notify only when it's genuinely done here — not when it's about
+                    // to relocate out of an incomplete folder (`final_dir` still set),
+                    // which would fire again after the move re-completes.
+                    let just_finished = status == TaskStatus::Seeding
+                        && entry.task.completed_at.is_none()
+                        && entry.task.final_dir.is_none();
                     if status == TaskStatus::Seeding && entry.task.completed_at.is_none() {
                         entry.task.completed_at = Some(now_ms());
                     }
@@ -2201,6 +2255,7 @@ impl Inner {
                         entry.task.clone(),
                         newly_started,
                         newly_seeding,
+                        just_finished,
                         frees_slot,
                         do_emit,
                         do_persist,
@@ -2242,6 +2297,11 @@ impl Inner {
                     // Slipped into Stalled — free the slot for a queued task.
                     Inner::pump(inner.clone());
                 }
+                if just_finished {
+                    // A torrent finished downloading (first time) and isn't headed to
+                    // an incomplete→save relocation — notify.
+                    Inner::notify_complete(&inner, &task);
+                }
                 if do_emit {
                     inner.emitter.progress(&TaskProgress {
                         id: id.clone(),
@@ -2271,7 +2331,9 @@ impl Inner {
             Archive(Task, bool),
             Move(PendingMove),
             Requeue(Task),
-            Settle(Task),
+            /// Settle the task; the bool is whether this was its first finish (drives
+            /// the completion notification).
+            Settle(Task, bool),
         }
 
         let post = {
@@ -2310,6 +2372,10 @@ impl Inner {
                 entry.task.updated_at = now_ms();
                 Post::Archive(entry.task.clone(), delete_file)
             } else {
+                // Was this the first time it reached a finished state? Drives the
+                // completion notification (a torrent that already notified when it
+                // started seeding has `completed_at` set, so it won't fire again).
+                let was_incomplete = entry.task.completed_at.is_none();
                 // Settle on the real outcome first — even when a move is pending, so
                 // a transfer that finished the instant we asked it to pause is
                 // recorded as Completed and gets its finished file relocated (not a
@@ -2343,11 +2409,13 @@ impl Inner {
                 entry.task.leechers = 0;
                 entry.task.up_speed = 0;
                 entry.task.updated_at = now_ms();
+                let just_finished =
+                    was_incomplete && entry.task.status == TaskStatus::Completed;
                 match entry.pending_move.take() {
                     // `begin_move` re-reads the just-settled status and flips it to
                     // Moving.
                     Some(pm) => Post::Move(pm),
-                    None => Post::Settle(entry.task.clone()),
+                    None => Post::Settle(entry.task.clone(), just_finished),
                 }
             }
         };
@@ -2436,7 +2504,7 @@ impl Inner {
                 inner.emitter.updated(&task);
                 Inner::pump(inner);
             }
-            Post::Settle(task) => {
+            Post::Settle(task, just_finished) => {
                 if task.status == TaskStatus::Canceled {
                     // Canceled discards partial data — a torrent's own files, or an
                     // HTTP `.part` (torrent-aware via `purge_files`).
@@ -2444,7 +2512,8 @@ impl Inner {
                 }
                 let _ = inner.store.lock().unwrap().upsert(&task);
                 inner.emitter.updated(&task);
-                if Inner::will_convert(&inner, &task) {
+                let converting = Inner::will_convert(&inner, &task);
+                if converting {
                     // A completed `.torrent` download in a capture-enabled category
                     // is re-added as a torrent (then this HTTP record is dropped
                     // entirely), so its own completion hooks don't apply.
@@ -2455,6 +2524,11 @@ impl Inner {
                     // the save folder. Both no-op unless the category configured them.
                     Inner::export_torrent_on_complete(&inner, &task);
                     Inner::relocate_to_final(&inner, &task);
+                }
+                // Notify on a genuine first finish (not a captured `.torrent` that's
+                // just a conversion vehicle).
+                if just_finished && !converting {
+                    Inner::notify_complete(&inner, &task);
                 }
                 Inner::pump(inner);
             }
@@ -3306,6 +3380,9 @@ fn net_config(s: &Settings) -> NetConfig {
             upnp: s.torrent_upnp,
             download_bps: bps(s.torrent_download_limit),
             upload_bps: bps(s.torrent_upload_limit),
+            peer_connect_timeout: (s.peer_connect_timeout_secs > 0)
+                .then(|| Duration::from_secs(s.peer_connect_timeout_secs)),
+            port_span: s.torrent_port_span,
         },
     }
 }

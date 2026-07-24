@@ -84,6 +84,11 @@ pub struct TransferOpts {
     /// Stop seeding a torrent once it has seeded this long. `Duration::ZERO` =
     /// no time limit. Whichever of ratio/time comes first wins.
     pub seed_time_limit: Duration,
+    /// How long to wait for a magnet's metadata (from the swarm) before failing the
+    /// add. Non-torrent backends ignore it.
+    pub magnet_timeout: Duration,
+    /// How often to re-scrape the trackers for seeder/leecher counts. Torrent-only.
+    pub scrape_interval: Duration,
 }
 
 /// Network settings a backend applies to its client, refreshed when settings
@@ -113,6 +118,11 @@ pub struct TorrentNet {
     pub download_bps: Option<std::num::NonZeroU32>,
     /// Upload cap in bytes/sec, or `None` for unlimited.
     pub upload_bps: Option<std::num::NonZeroU32>,
+    /// How long to wait on a peer's handshake before dropping it, or `None` for the
+    /// engine default. Baked in when the session is built.
+    pub peer_connect_timeout: Option<Duration>,
+    /// How many ports past the listen port to try if it's busy. Baked in at build.
+    pub port_span: u16,
 }
 
 /// How a transfer ended. The supervisor maps this onto a [`TaskStatus`].

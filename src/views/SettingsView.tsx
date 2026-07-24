@@ -43,6 +43,14 @@ const SEED_TIME_OPTIONS = [0, 30, 60, 120, 360, 720, 1440];
 const RATE_LIMIT_OPTIONS = [0, 64, 128, 256, 512, 1024, 2048, 5120, 10240, 20480].map(
   (kib) => kib * 1024,
 );
+// Seconds to wait for a magnet's metadata before giving up.
+const MAGNET_TIMEOUT_OPTIONS = [30, 60, 120, 180, 300, 600];
+// Seconds between tracker scrapes for seeder/leecher counts.
+const SCRAPE_INTERVAL_OPTIONS = [30, 60, 90, 120, 300, 600];
+// Seconds to wait on a peer's handshake before dropping it.
+const PEER_CONNECT_OPTIONS = [3, 5, 10, 15, 30];
+// How many ports past the listen port to try if it's busy.
+const PORT_SPAN_OPTIONS = [0, 5, 10, 20, 50, 100];
 
 // The tabs of the combined settings card: General (behavior + advanced), HTTP
 // (direct-download tuning), Torrent (torrent tuning).
@@ -278,6 +286,28 @@ export function SettingsView({ accent, setAccent }: Props) {
           <>
             <div className="setting-row">
               <div>
+                <div className="setting-label">Concurrent downloads</div>
+                <div className="dim">
+                  How many downloads run at once, across HTTP and torrents. The
+                  rest wait in the queue. Set to Unlimited to run every download
+                  immediately.
+                </div>
+              </div>
+              <Select
+                value={String(settings?.max_concurrent ?? 4)}
+                ariaLabel="Concurrent downloads"
+                caret
+                disabled={!settings}
+                onChange={(v) => patch({ max_concurrent: Number(v) })}
+                options={CONCURRENCY_OPTIONS.map((n) => ({
+                  value: String(n),
+                  label: n === 0 ? "Unlimited" : String(n),
+                }))}
+              />
+            </div>
+
+            <div className="setting-row">
+              <div>
                 <div className="setting-label">Changing a download's category</div>
                 <div className="dim">
                   What happens when you move a download to another category. Move
@@ -325,22 +355,49 @@ export function SettingsView({ accent, setAccent }: Props) {
 
             <div className="setting-row">
               <div>
-                <div className="setting-label">Connection timeout</div>
+                <div className="setting-label">Close button minimizes to tray</div>
                 <div className="dim">
-                  How long to wait to reach a server before giving up on the
-                  connection. Applies to the built-in engine.
+                  Closing the window hides moin to the system tray and keeps
+                  downloads and seeding running in the background — reopen it from
+                  the tray icon. Turn off to quit moin when you close the window.
                 </div>
               </div>
-              <Select
-                value={String(settings?.connect_timeout_secs ?? 30)}
-                ariaLabel="Connection timeout"
-                caret
+              <Switch
+                checked={settings?.close_to_tray ?? true}
+                ariaLabel="Close button minimizes to tray"
                 disabled={!settings}
-                onChange={(v) => patch({ connect_timeout_secs: Number(v) })}
-                options={CONNECT_OPTIONS.map((n) => ({
-                  value: String(n),
-                  label: n === 0 ? "No limit" : secondsLabel(n),
-                }))}
+                onChange={(v) => patch({ close_to_tray: v })}
+              />
+            </div>
+
+            <div className="setting-row">
+              <div>
+                <div className="setting-label">Notify when downloads finish</div>
+                <div className="dim">
+                  Show a system notification when a download completes.
+                </div>
+              </div>
+              <Switch
+                checked={settings?.notify_on_complete ?? true}
+                ariaLabel="Notify when downloads finish"
+                disabled={!settings}
+                onChange={(v) => patch({ notify_on_complete: v })}
+              />
+            </div>
+
+            <div className="setting-row">
+              <div>
+                <div className="setting-label">Add downloads paused</div>
+                <div className="dim">
+                  New downloads wait paused instead of starting right away — resume
+                  them from the row when you're ready.
+                </div>
+              </div>
+              <Switch
+                checked={settings?.add_paused ?? false}
+                ariaLabel="Add downloads paused"
+                disabled={!settings}
+                onChange={(v) => patch({ add_paused: v })}
               />
             </div>
           </>
@@ -372,21 +429,21 @@ export function SettingsView({ accent, setAccent }: Props) {
 
         <div className="setting-row">
           <div>
-            <div className="setting-label">Concurrent downloads</div>
+            <div className="setting-label">Connection timeout</div>
             <div className="dim">
-              How many downloads run at once. The rest wait in the queue. Set to
-              Unlimited to run every download immediately.
+              How long to wait to reach a server before giving up on the
+              connection. Applies to HTTP downloads on the built-in engine.
             </div>
           </div>
           <Select
-            value={String(settings?.max_concurrent ?? 4)}
-            ariaLabel="Concurrent downloads"
+            value={String(settings?.connect_timeout_secs ?? 30)}
+            ariaLabel="Connection timeout"
             caret
             disabled={!settings}
-            onChange={(v) => patch({ max_concurrent: Number(v) })}
-            options={CONCURRENCY_OPTIONS.map((n) => ({
+            onChange={(v) => patch({ connect_timeout_secs: Number(v) })}
+            options={CONNECT_OPTIONS.map((n) => ({
               value: String(n),
-              label: n === 0 ? "Unlimited" : String(n),
+              label: n === 0 ? "No limit" : secondsLabel(n),
             }))}
           />
         </div>
@@ -617,6 +674,90 @@ export function SettingsView({ accent, setAccent }: Props) {
             options={SEED_TIME_OPTIONS.map((n) => ({
               value: String(n),
               label: n === 0 ? "No limit" : minutesLabel(n),
+            }))}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Magnet timeout</div>
+            <div className="dim">
+              How long to wait for a magnet's metadata from the swarm before giving
+              up. Raise it for rare torrents with few peers.
+            </div>
+          </div>
+          <Select
+            value={String(settings?.magnet_timeout_secs ?? 180)}
+            ariaLabel="Magnet timeout"
+            caret
+            disabled={!settings}
+            onChange={(v) => patch({ magnet_timeout_secs: Number(v) })}
+            options={MAGNET_TIMEOUT_OPTIONS.map((n) => ({
+              value: String(n),
+              label: secondsLabel(n),
+            }))}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Tracker scrape interval</div>
+            <div className="dim">
+              How often moin re-checks the trackers for the seeder and leecher
+              counts shown on a torrent.
+            </div>
+          </div>
+          <Select
+            value={String(settings?.scrape_interval_secs ?? 90)}
+            ariaLabel="Tracker scrape interval"
+            caret
+            disabled={!settings}
+            onChange={(v) => patch({ scrape_interval_secs: Number(v) })}
+            options={SCRAPE_INTERVAL_OPTIONS.map((n) => ({
+              value: String(n),
+              label: secondsLabel(n),
+            }))}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Peer connection timeout</div>
+            <div className="dim">
+              How long to wait on a peer's handshake before dropping it. Applies
+              after a restart.
+            </div>
+          </div>
+          <Select
+            value={String(settings?.peer_connect_timeout_secs ?? 10)}
+            ariaLabel="Peer connection timeout"
+            caret
+            disabled={!settings}
+            onChange={(v) => patch({ peer_connect_timeout_secs: Number(v) })}
+            options={PEER_CONNECT_OPTIONS.map((n) => ({
+              value: String(n),
+              label: secondsLabel(n),
+            }))}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">Listen port fallback range</div>
+            <div className="dim">
+              If the listen port is busy, how many ports past it to try before
+              giving up. Applies after a restart.
+            </div>
+          </div>
+          <Select
+            value={String(settings?.torrent_port_span ?? 20)}
+            ariaLabel="Listen port fallback range"
+            caret
+            disabled={!settings}
+            onChange={(v) => patch({ torrent_port_span: Number(v) })}
+            options={PORT_SPAN_OPTIONS.map((n) => ({
+              value: String(n),
+              label: n === 0 ? "Just the one port" : `+${n} ports`,
             }))}
           />
         </div>
