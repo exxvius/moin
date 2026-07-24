@@ -2506,26 +2506,50 @@ fn delete_torrent_files(task: &Task) -> Result<(), String> {
     // for a beat, so the first delete fails ("in use"/"not empty") even though it'll
     // succeed moments later. Cheap insurance against a transient failure leaving a
     // stray errored task with un-deleted files.
-    // librqbit's peer tasks can keep a file handle open for a few seconds after the
-    // torrent is detached (they drop it only when they notice cancellation), so a
-    // delete right after can hit "in use"/"not empty" or find a re-created folder.
-    // Retry with growing backoff up to ~12s before giving up.
-    const BACKOFFS_MS: [u64; 10] = [100, 200, 300, 500, 800, 1200, 1600, 2000, 2500, 3000];
-    let mut last = delete_torrent_files_once(task);
-    if last.is_ok() {
-        return last;
-    }
-    for (attempt, &wait) in BACKOFFS_MS.iter().enumerate() {
-        tracing::warn!(dest = %task.dest, attempt, error = ?last.as_ref().err(), "torrent delete attempt failed, retrying");
-        std::thread::sleep(Duration::from_millis(wait));
-        last = delete_torrent_files_once(task);
-        if last.is_ok() {
-            tracing::info!(dest = %task.dest, retries = attempt + 1, "torrent delete succeeded on retry");
-            return last;
+    // Deleting a *running* torrent's files races its writers: librqbit's peer tasks
+    // keep flushing pieces for several seconds after the torrent is detached (they
+    // stop only when they notice cancellation), so the files can be re-created right
+    // after a delete "succeeds". So we don't trust one successful pass — we delete,
+    // wait, and confirm the files stay gone; if a draining writer brought them back,
+    // we delete again. Bounded to ~20s before giving up.
+    const CONFIRM_MS: u64 = 1500;
+    const RETRY_MS: u64 = 400;
+    const MAX_MS: u64 = 20_000;
+    let start = Instant::now();
+    let mut last_err: Option<String> = None;
+    loop {
+        match delete_torrent_files_once(task) {
+            Ok(()) => {
+                // Deleted. Wait, then check nothing came back before trusting it.
+                std::thread::sleep(Duration::from_millis(CONFIRM_MS));
+                if !torrent_files_present(task) {
+                    return Ok(());
+                }
+                tracing::warn!(dest = %task.dest, "files re-appeared after delete (writer draining) — deleting again");
+                last_err = Some("files re-created by a draining writer".to_string());
+            }
+            Err(e) => {
+                tracing::warn!(dest = %task.dest, error = %e, "delete attempt failed — retrying");
+                last_err = Some(e);
+                std::thread::sleep(Duration::from_millis(RETRY_MS));
+            }
+        }
+        if start.elapsed() >= Duration::from_millis(MAX_MS) {
+            tracing::error!(dest = %task.dest, "torrent delete gave up after ~20s");
+            return Err(last_err.unwrap_or_else(|| "delete timed out".to_string()));
         }
     }
-    tracing::error!(dest = %task.dest, error = ?last.as_ref().err(), "torrent delete gave up after retries");
-    last
+}
+
+/// Whether any of a torrent's on-disk content is still present at `dest` — the
+/// whole folder for an own-dir layout, or any of its files in a shared folder.
+fn torrent_files_present(task: &Task) -> bool {
+    let base = Path::new(&task.dest);
+    if task.own_dir {
+        base.exists()
+    } else {
+        task.files.iter().any(|f| base.join(&f.path).exists())
+    }
 }
 
 fn delete_torrent_files_once(task: &Task) -> Result<(), String> {
