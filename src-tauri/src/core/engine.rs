@@ -830,8 +830,9 @@ impl Engine {
     /// session and re-downloading its files right after they were deleted. Returns
     /// the first error, if any (a deferred delete surfaces its own error on the task).
     pub async fn archive_many(&self, ids: Vec<String>, delete_file: bool) -> Result<(), String> {
-        {
+        let (running, queued) = {
             let mut tasks = self.inner.tasks.lock().unwrap();
+            let (mut running, mut queued) = (0usize, 0usize);
             for id in &ids {
                 let Some(entry) = tasks.get_mut(id) else {
                     continue;
@@ -839,18 +840,38 @@ impl Engine {
                 if entry.control.is_some() {
                     // Running: record the intent now so it's off-limits immediately.
                     entry.pending_archive = Some(delete_file);
+                    running += 1;
                 } else if entry.task.status == TaskStatus::Queued {
                     // Queued: pull it out of the queue so pump won't start it.
                     entry.task.status = TaskStatus::Canceled;
+                    queued += 1;
                 }
             }
+            (running, queued)
+        };
+        tracing::info!(
+            count = ids.len(),
+            running,
+            queued,
+            delete_file,
+            "archive_many: starting batch"
+        );
+        // Process the items concurrently — a delete can wait seconds on lingering
+        // file handles, so doing them one after another made a big selection crawl.
+        let mut handles = Vec::with_capacity(ids.len());
+        for id in ids {
+            let engine = self.clone();
+            handles.push(tokio::spawn(
+                async move { engine.archive(&id, delete_file).await },
+            ));
         }
         let mut first_err = None;
-        for id in ids {
-            if let Err(e) = self.archive(&id, delete_file).await {
+        for h in handles {
+            if let Ok(Err(e)) = h.await {
                 first_err.get_or_insert(e);
             }
         }
+        tracing::info!("archive_many: batch dispatched");
         match first_err {
             Some(e) => Err(e),
             None => Ok(()),
@@ -948,12 +969,16 @@ impl Engine {
                 }
             };
             if delete_file {
+                tracing::info!(id = %id, dest = %task.dest, "archive: deleting files (not running)");
                 // Off the async executor — the delete verifies + retries with sleeps.
                 let t = task.clone();
                 tokio::task::spawn_blocking(move || delete_torrent_files(&t))
                     .await
                     .unwrap_or_else(|e| Err(e.to_string()))
-                    .map_err(|e| format!("Couldn't delete the files: {e}. The download is still in your list — free the files (e.g. close a window that's in the folder) and try again."))?;
+                    .map_err(|e| {
+                        tracing::error!(id = %id, dest = %task.dest, error = %e, "archive: delete failed (not running)");
+                        format!("Couldn't delete the files: {e}. The download is still in your list — free the files (e.g. close a window that's in the folder) and try again.")
+                    })?;
             }
 
             let task = {
@@ -1629,6 +1654,7 @@ impl Inner {
             if !startable(entry) {
                 return;
             }
+            tracing::info!(id = %id, kind = ?entry.task.kind, hash = ?entry.task.info_hash, "start: launching task");
             let control = Control::new();
             control.set_force(entry.task.force_start);
             entry.control = Some(control.clone());
@@ -1951,8 +1977,15 @@ impl Inner {
                     let inner2 = inner.clone();
                     let id2 = id.clone();
                     tokio::spawn(async move {
+                        let dest = task.dest.clone();
+                        tracing::info!(id = %id2, %dest, hash = ?task.info_hash, "finish: deleting torrent files (re-detach first)");
                         if let Some(hash) = task.info_hash.clone() {
-                            let _ = inner2.embedded().remove_torrent(&hash).await;
+                            match inner2.embedded().remove_torrent(&hash).await {
+                                Some(Err(e)) => {
+                                    tracing::warn!(id = %id2, %hash, error = %e, "finish: re-detach failed")
+                                }
+                                _ => tracing::debug!(id = %id2, %hash, "finish: re-detached"),
+                            }
                         }
                         let deleted = tokio::task::spawn_blocking({
                             let task = task.clone();
@@ -1960,6 +1993,10 @@ impl Inner {
                         })
                         .await
                         .unwrap_or_else(|e| Err(e.to_string()));
+                        match &deleted {
+                            Ok(()) => tracing::info!(id = %id2, %dest, "finish: torrent files deleted, archiving"),
+                            Err(e) => tracing::error!(id = %id2, %dest, error = %e, "finish: torrent delete failed, keeping as errored"),
+                        }
 
                         let task = {
                             let mut tasks = inner2.tasks.lock().unwrap();
@@ -2469,16 +2506,25 @@ fn delete_torrent_files(task: &Task) -> Result<(), String> {
     // for a beat, so the first delete fails ("in use"/"not empty") even though it'll
     // succeed moments later. Cheap insurance against a transient failure leaving a
     // stray errored task with un-deleted files.
-    let mut last = Ok(());
-    for attempt in 0..6 {
+    // librqbit's peer tasks can keep a file handle open for a few seconds after the
+    // torrent is detached (they drop it only when they notice cancellation), so a
+    // delete right after can hit "in use"/"not empty" or find a re-created folder.
+    // Retry with growing backoff up to ~12s before giving up.
+    const BACKOFFS_MS: [u64; 10] = [100, 200, 300, 500, 800, 1200, 1600, 2000, 2500, 3000];
+    let mut last = delete_torrent_files_once(task);
+    if last.is_ok() {
+        return last;
+    }
+    for (attempt, &wait) in BACKOFFS_MS.iter().enumerate() {
+        tracing::warn!(dest = %task.dest, attempt, error = ?last.as_ref().err(), "torrent delete attempt failed, retrying");
+        std::thread::sleep(Duration::from_millis(wait));
         last = delete_torrent_files_once(task);
         if last.is_ok() {
-            return Ok(());
-        }
-        if attempt < 5 {
-            std::thread::sleep(Duration::from_millis(150 * (attempt as u64 + 1)));
+            tracing::info!(dest = %task.dest, retries = attempt + 1, "torrent delete succeeded on retry");
+            return last;
         }
     }
+    tracing::error!(dest = %task.dest, error = ?last.as_ref().err(), "torrent delete gave up after retries");
     last
 }
 
