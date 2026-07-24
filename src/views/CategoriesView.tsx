@@ -195,7 +195,7 @@ export function CategoriesView() {
         </button>
       </div>
 
-      <div className="card cat-panel">
+      <div className="cat-panel">
         <div className="cat-scroll">
           {cats.length === 0 ? (
             <div className="dl-empty">

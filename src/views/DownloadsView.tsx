@@ -273,39 +273,40 @@ function joinPath(base: string, rel: string): string {
 
 interface Stats {
   totalDownloaded: number;
+  totalUploaded: number;
+  ratio: number | null;
   avgSpeed: number;
   filesDone: number;
-  successRate: number | null;
   timeMs: number;
 }
 
 /** All-time stats across every download (including archived). */
 function computeStats(tasks: Task[]): Stats {
   let totalDownloaded = 0;
+  let totalUploaded = 0;
   let speedBytes = 0;
   let speedMs = 0;
   let filesDone = 0;
-  let failed = 0;
   let timeMs = 0;
   for (const t of tasks) {
     // A checking torrent's `received` is pieces being verified on disk, not data
     // downloaded this run — counting it would inflate the all-time total, then snap
     // back when checking ends. Only count real downloaded bytes.
     if (t.status !== "checking") totalDownloaded += t.received;
+    totalUploaded += t.uploaded ?? 0;
     timeMs += t.active_ms;
     if (t.active_ms > 0) {
       speedBytes += t.received;
       speedMs += t.active_ms;
     }
     if (t.status === "completed") filesDone++;
-    else if (t.status === "failed") failed++;
   }
-  const total = filesDone + failed;
   return {
     totalDownloaded,
+    totalUploaded,
+    ratio: totalDownloaded > 0 ? totalUploaded / totalDownloaded : null,
     avgSpeed: speedMs > 0 ? speedBytes / (speedMs / 1000) : 0,
     filesDone,
-    successRate: total > 0 ? (filesDone / total) * 100 : null,
     timeMs,
   };
 }
@@ -1145,59 +1146,11 @@ export function DownloadsView() {
 
   return (
     <div className="view downloads">
-      <div className="view-head">
-        <h2>Downloads</h2>
-        <p>Everything moin is working on.</p>
-      </div>
-
-      {showAdd && (
-        <AddDownloadModal
-          onClose={() => setShowAdd(false)}
-          onTorrent={(source) => {
-            setShowAdd(false);
-            setTorrentSource(source);
-          }}
-        />
-      )}
-      {torrentSource && (
-        <AddTorrentModal
-          source={torrentSource}
-          onClose={() => setTorrentSource(null)}
-        />
-      )}
-
-      <div className="card stat-card">
-        <div className="stat-hero">
-          <span className="stat-hero-num">
-            {formatBytes(stats.totalDownloaded)}
-          </span>
-          <span className="stat-hero-label">downloaded all-time</span>
+      <div className="view-head with-toolbar">
+        <div className="view-head-title">
+          <h2>Downloads</h2>
+          <p>Everything moin is working on.</p>
         </div>
-        <div className="stat-row">
-          <div className="stat">
-            <div className="stat-num">{formatSpeed(stats.avgSpeed)}</div>
-            <div className="stat-label">Avg speed</div>
-          </div>
-          <div className="stat">
-            <div className="stat-num">{stats.filesDone}</div>
-            <div className="stat-label">Files done</div>
-          </div>
-          <div className="stat">
-            <div className="stat-num">
-              {stats.successRate != null
-                ? `${Math.round(stats.successRate)}%`
-                : "—"}
-            </div>
-            <div className="stat-label">Success</div>
-          </div>
-          <div className="stat">
-            <div className="stat-num">{formatDuration(stats.timeMs)}</div>
-            <div className="stat-label">Time spent</div>
-          </div>
-        </div>
-      </div>
-
-      <div className="card dl-panel">
         <div className="dl-toolbar">
           <div className="dl-f-status">
             <MultiSelect
@@ -1344,7 +1297,25 @@ export function DownloadsView() {
             </button>
           </div>
         </div>
+      </div>
 
+      {showAdd && (
+        <AddDownloadModal
+          onClose={() => setShowAdd(false)}
+          onTorrent={(source) => {
+            setShowAdd(false);
+            setTorrentSource(source);
+          }}
+        />
+      )}
+      {torrentSource && (
+        <AddTorrentModal
+          source={torrentSource}
+          onClose={() => setTorrentSource(null)}
+        />
+      )}
+
+      <div className="dl-panel">
         {rows.length === 0 ? (
           <div className="dl-empty">
             <div className="card-title">
@@ -1429,11 +1400,34 @@ export function DownloadsView() {
       <div className="dl-statusbar">
         <span>{counts.all} in list</span>
         {downloadingCount > 0 && <span>{downloadingCount} downloading</span>}
+        {totalSpeed > 0 && (
+          <span className="num">↓ {formatSpeed(totalSpeed)}</span>
+        )}
         <span className="grow" />
         {sel.selected.size > 0 && (
           <span className="sel-count">{sel.selected.size} selected</span>
         )}
-        <span className="num">Total {formatSpeed(totalSpeed)}</span>
+        <div className="sb-stats">
+          <span className="sb-stat">
+            <b className="grad">{formatBytes(stats.totalDownloaded)}</b>{" "}
+            downloaded
+          </span>
+          <span className="sb-stat">
+            <b>{formatBytes(stats.totalUploaded)}</b> uploaded
+          </span>
+          <span className="sb-stat">
+            <b>{stats.ratio != null ? stats.ratio.toFixed(2) : "—"}</b> ratio
+          </span>
+          <span className="sb-stat">
+            <b>{formatSpeed(stats.avgSpeed)}</b> avg
+          </span>
+          <span className="sb-stat sb-collapse">
+            <b>{stats.filesDone}</b> done
+          </span>
+          <span className="sb-stat">
+            <b>{formatDuration(stats.timeMs)}</b> spent
+          </span>
+        </div>
       </div>
 
       {sel.marquee &&

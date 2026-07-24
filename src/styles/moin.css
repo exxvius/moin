@@ -321,7 +321,7 @@
 .cat-panel {
   flex: 1;
   min-height: 0;
-  padding: var(--space-4);
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -1854,10 +1854,28 @@
   margin-bottom: 0;
 }
 
-/* Toolbar: filter dropdowns on the left, name search on the right. More
-   dropdowns (category, tag…) will join the filter row later. */
-/* One row when it fits, two when it doesn't (a container query on the toolbar's
-   own width, not the viewport). Narrow = the 2×2 grid below: status top-left,
+/* The toolbar lives in the heading row, to the right of the title, so the list
+   gets the full height below. Title left, toolbar right; the toolbar wraps under
+   the title when the window is too narrow for both on one line. The header is the
+   query container for the toolbar's one-row/two-row switch. */
+.view-head.with-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-6);
+  container-type: inline-size;
+}
+.view-head.with-toolbar .view-head-title {
+  flex: none;
+  min-width: 0;
+}
+.view-head.with-toolbar .dl-toolbar {
+  flex: 1 1 340px;
+  min-width: 260px;
+}
+
+/* One row when it fits, the 2×2 grid below when it doesn't: status top-left,
    search + add top-right, category bottom-left, sort bottom-right. */
 .dl-toolbar {
   display: grid;
@@ -1891,8 +1909,9 @@
   gap: var(--space-3);
   justify-content: flex-end;
 }
-/* Wide enough for one row: pack all four left to right, search fills to the add. */
-@container (min-width: 1000px) {
+/* Wide enough (header, minus the title) for one row: pack all four left to right,
+   search fills to the add. */
+@container (min-width: 1175px) {
   .dl-toolbar {
     grid-template-columns: auto auto auto 1fr;
     grid-template-areas: "status category sort search";
@@ -1956,8 +1975,10 @@
   background: var(--control-bg);
   box-shadow: var(--control-shadow);
   color: var(--text);
+  /* Inherit the full font (size + line-height) so the input's box matches the
+     filter/sort triggers exactly — overriding just the size gave it a shorter line
+     box and a hair less height than them. */
   font: inherit;
-  font-size: var(--text-sm);
 }
 .dl-search::placeholder {
   color: var(--text-faint);
@@ -2674,23 +2695,24 @@
 }
 
 /* Stats card up top. */
-.stat-card {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-4) var(--space-6);
-}
-.stat-hero {
+/* All-time stats live in the footer status bar (right side, where the live rate
+   used to sit): compact "value label" pairs, value emphasized, label dim. */
+.sb-stats {
   display: flex;
   align-items: baseline;
-  gap: var(--space-3);
+  gap: var(--space-4);
+  min-width: 0;
+  overflow: hidden;
 }
-.stat-hero-num {
-  font-size: var(--text-2xl);
-  font-weight: 700;
-  line-height: 1;
+.sb-stat {
+  white-space: nowrap;
+}
+.sb-stat b {
+  font-weight: 650;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.sb-stat b.grad {
   background: linear-gradient(
     180deg,
     oklch(92% 0.09 var(--accent-h)),
@@ -2700,43 +2722,25 @@
   background-clip: text;
   color: transparent;
 }
-.stat-hero-label {
-  color: var(--text-dim);
-}
-.stat-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-6);
-}
-.stat-num {
-  font-size: var(--text-xl);
-  font-weight: 600;
-  line-height: 1.1;
-  font-variant-numeric: tabular-nums;
-}
-.stat-label {
-  margin-top: 2px;
-  font-size: var(--text-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-faint);
+/* Shed the lowest-priority stat when the bar gets tight, so it stays one line. */
+@container (max-width: 780px) {
+  .sb-stat.sb-collapse {
+    display: none;
+  }
 }
 
-/* The list panel: a card holding the toolbar + the scrollable list. It must NOT
-   have its own backdrop-filter — a blurred ancestor cancels the header's blur. */
+/* The list panel: holds the scrollable list, flush to the page (no card) so the
+   working area is maximized. It must NOT have its own backdrop-filter — a blurred
+   ancestor cancels the header's blur. */
 .dl-panel {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-4);
+  padding: 0;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
-  /* Query container for the toolbar's one-row/two-row switch — the query targets
-     descendants (`.dl-toolbar`), so it lives on the panel, not the toolbar. Only
-     the inline axis is contained, so the list's vertical flex/scroll is untouched. */
-  container-type: inline-size;
 }
 
 /* Bottom status bar — pinned to the bottom of the view. */
@@ -2748,6 +2752,8 @@
   padding: 0 var(--space-2);
   font-size: var(--text-sm);
   color: var(--text-faint);
+  /* Container so the footer stats can shed their lowest-priority item when narrow. */
+  container-type: inline-size;
 }
 .dl-statusbar .grow {
   flex: 1;
