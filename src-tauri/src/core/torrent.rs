@@ -28,6 +28,23 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// reachable peers would otherwise hang forever.
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How long `add_torrent` may take before we give up. A magnet resolves its
+/// metadata from the swarm inside the add, so this bounds a peerless magnet
+/// instead of leaving the task wedged in "Connecting" forever.
+const ADD_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Wait until the control asks us to stop (Pause/Cancel), polling the shared
+/// atomic. Used to race a possibly-slow `add_torrent` so a stuck add stays
+/// cancellable — otherwise pause/cancel/remove do nothing until the add returns.
+async fn wait_for_stop(control: &Control) -> Signal {
+    loop {
+        match control.signal() {
+            Signal::Run => tokio::time::sleep(Duration::from_millis(150)).await,
+            stop => return stop,
+        }
+    }
+}
+
 /// How often to re-scrape the trackers for seeder/leecher counts.
 const SCRAPE_INTERVAL: Duration = Duration::from_secs(90);
 
@@ -274,11 +291,12 @@ impl TorrentEngine {
 
     /// Detach a torrent from the session (releasing its file handles), always
     /// *keeping* its files — moin deletes the actual data itself so it can delete
-    /// only this torrent's files, never a shared folder it doesn't own. Also drops
-    /// our cached `.torrent`. A torrent that was never started isn't in the session
-    /// — that's fine, we just clear the cache.
+    /// only this torrent's files, never a shared folder it doesn't own. The cached
+    /// `.torrent` is deliberately kept: an archived torrent can be re-downloaded,
+    /// and the cache lets that re-add skip a slow swarm metadata resolve. Orphaned
+    /// caches (info hashes no longer in moin's manifest) are swept by `prune_store`
+    /// at launch. A torrent that was never started isn't in the session — fine.
     pub async fn remove(&self, info_hash: &str) -> Result<(), String> {
-        let _ = std::fs::remove_file(self.meta_path(info_hash));
         let session = self.session().await?;
         let id = librqbit::api::TorrentIdOrHash::try_from(info_hash)
             .map_err(|_| "invalid info hash".to_string())?;
@@ -357,12 +375,34 @@ impl TorrentEngine {
             ..Default::default()
         };
 
-        let handle = match session.add_torrent(add, Some(add_opts)).await {
-            Ok(resp) => match resp.into_handle() {
-                Some(h) => h,
-                None => return Outcome::Failed("torrent produced no handle".to_string()),
-            },
-            Err(e) => return Outcome::Failed(format!("couldn't add the torrent: {e:#}")),
+        // Race the add against the control so a slow add (a magnet resolves its
+        // metadata from the swarm here, before it returns a handle) stays responsive
+        // to pause/cancel/remove instead of wedging the task in "Connecting". A hard
+        // timeout bounds a peerless magnet.
+        let handle = tokio::select! {
+            biased;
+            stop = wait_for_stop(control) => {
+                return match stop {
+                    Signal::Pause => Outcome::Paused,
+                    _ => Outcome::Canceled,
+                };
+            }
+            resp = tokio::time::timeout(ADD_TIMEOUT, session.add_torrent(add, Some(add_opts))) => {
+                match resp {
+                    Err(_) => {
+                        return Outcome::Failed(
+                            "timed out adding the torrent — no metadata or peers answered".to_string(),
+                        )
+                    }
+                    Ok(Err(e)) => {
+                        return Outcome::Failed(format!("couldn't add the torrent: {e:#}"))
+                    }
+                    Ok(Ok(resp)) => match resp.into_handle() {
+                        Some(h) => h,
+                        None => return Outcome::Failed("torrent produced no handle".to_string()),
+                    },
+                }
+            }
         };
 
         // A resume re-adds an already-managed torrent that we left paused; wake it.

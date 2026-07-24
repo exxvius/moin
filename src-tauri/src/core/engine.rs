@@ -924,6 +924,15 @@ impl Engine {
             entry.task.error = None;
             entry.task.active_ms = 0;
             entry.task.completed_at = None;
+            // A retry is a fresh download, not a resume — clear every leftover
+            // progress reading so nothing stale carries into the re-run (the torrent
+            // path also had its librqbit fastresume dropped when it was archived, so
+            // it re-checks/re-fetches from real disk state).
+            entry.task.uploaded = 0;
+            entry.task.force_seed = false;
+            for f in entry.task.files.iter_mut() {
+                f.received = 0;
+            }
             entry.task.updated_at = now_ms();
             entry.task.clone()
         };
@@ -2241,6 +2250,23 @@ fn purge_files(task: &Task, delete_file: bool) {
 /// or the folder is open in another program) so the caller can hold the delete.
 fn delete_torrent_files(task: &Task) -> Result<(), String> {
     let base = Path::new(&task.dest);
+
+    // "Create subfolder" layout: moin made this folder exclusively for the torrent,
+    // so remove the whole tree in one go. This also clears the intermediate and
+    // deselected-file directories librqbit created but never filled, which a
+    // file-by-file delete leaves behind (the "directory is not empty" failure).
+    if task.own_dir {
+        return match std::fs::remove_dir_all(base) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.to_string()),
+        };
+    }
+
+    // Saved directly into a shared folder: delete only this torrent's own files,
+    // then every empty directory it created — every ancestor prefix of every file,
+    // deepest first — while never touching the shared folder or a dir that still
+    // holds someone else's files (`remove_dir` no-ops on a non-empty dir).
     let mut failed: Option<String> = None;
     for f in &task.files {
         let path = base.join(&f.path);
@@ -2248,27 +2274,20 @@ fn delete_torrent_files(task: &Task) -> Result<(), String> {
             failed.get_or_insert_with(|| e.to_string());
         }
     }
-    // Empty sub-directories, deepest first so nested ones clear before parents.
     let mut dirs: Vec<PathBuf> = task
         .files
         .iter()
-        .filter_map(|f| Path::new(&f.path).parent())
+        .flat_map(|f| Path::new(&f.path).ancestors().skip(1)) // skip the file itself
         .filter(|p| !p.as_os_str().is_empty())
         .map(|p| base.join(p))
         .collect();
     dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
     dirs.dedup();
     for d in dirs {
-        let _ = std::fs::remove_dir(d); // only removes empties; leftovers surface below
+        let _ = std::fs::remove_dir(d); // only removes empties; shared content stays
     }
-    // Our own content folder: surface a failure (it's likely open elsewhere) so the
-    // delete can be retried after the user frees it. `remove_dir` also fails on a
-    // non-empty folder, which catches any file that couldn't be deleted above.
-    if task.own_dir && base.exists() {
-        if let Err(e) = std::fs::remove_dir(base) {
-            failed.get_or_insert_with(|| e.to_string());
-        }
-    }
+    // Surface a genuine leftover (a file we couldn't delete — likely open elsewhere)
+    // so the caller holds the item in the list for a retry.
     match failed {
         Some(e) => Err(e),
         None => Ok(()),
