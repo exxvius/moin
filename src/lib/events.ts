@@ -18,6 +18,12 @@ export function subscribeConfirmQuit(onConfirm: () => void): Promise<UnlistenFn>
   return listen(EV.confirmQuit, () => onConfirm());
 }
 
+/** Subscribe to just the "a download was added" event — fires only on genuine
+ *  new adds, not on the initial list load. Returns an unlisten function. */
+export function subscribeTaskAdded(onAdded: () => void): Promise<UnlistenFn> {
+  return listen(EV.added, () => onAdded());
+}
+
 export interface TaskHandlers {
   onAdded?: (task: Task) => void;
   /** A coalesced batch of progress ticks (the backend flushes on a timer). */

@@ -178,11 +178,11 @@ export function AddDownloadModal({ onClose, onTorrent }: Props) {
             />
           )}
           <div className="add-modal-actions">
-            <button className="dl-btn" onClick={onClose}>
+            <button className="btn ghost" onClick={onClose}>
               Cancel
             </button>
             <button
-              className="btn-primary"
+              className="btn primary"
               onClick={submit}
               disabled={busy || url.trim().length === 0}
             >

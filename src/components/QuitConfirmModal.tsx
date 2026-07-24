@@ -32,13 +32,13 @@ export function QuitConfirmModal({ onMinimize, onQuit, onCancel }: Props) {
           Quitting will stop your active downloads and seeding.
         </div>
         <div className="modal-actions">
-          <button className="qc-btn ghost" onClick={onCancel}>
+          <button className="btn ghost" onClick={onCancel}>
             Cancel
           </button>
-          <button className="qc-btn" onClick={onMinimize} autoFocus>
+          <button className="btn" onClick={onMinimize} autoFocus>
             Minimize to tray
           </button>
-          <button className="qc-btn danger" onClick={onQuit}>
+          <button className="btn danger" onClick={onQuit}>
             Quit anyway
           </button>
         </div>

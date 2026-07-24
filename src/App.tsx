@@ -11,9 +11,10 @@ import {
   ThemeToggleIcon,
 } from "./components/icons";
 import { QuitConfirmModal } from "./components/QuitConfirmModal";
+import { RailAccentPicker } from "./components/RailAccentPicker";
 import { StoreProvider } from "./lib/store";
 import { initCursorFx } from "./lib/cursor";
-import { subscribeConfirmQuit } from "./lib/events";
+import { subscribeConfirmQuit, subscribeTaskAdded } from "./lib/events";
 import { api } from "./lib/api";
 import { useTheme } from "./lib/theme";
 import { useAccent } from "./lib/accent";
@@ -34,6 +35,20 @@ function Shell() {
   const [accent, setAccent] = useAccent();
   const [view, setView] = useState<View>("downloads");
   const [quitPrompt, setQuitPrompt] = useState(false);
+  // Which rail icon last got clicked + a bump counter, so re-clicking replays its
+  // one-shot icon animation (the counter re-keys the icon, remounting it).
+  const [pulse, setPulse] = useState<{ id: View | ""; n: number }>({
+    id: "",
+    n: 0,
+  });
+  const goto = (id: View) => {
+    setView(id);
+    setPulse((p) => ({ id, n: p.n + 1 }));
+  };
+  // Class + remount key for a rail button's icon: it animates only after a click
+  // (never on first load), and replays on every click.
+  const railClass = (id: View) => `rail-btn${pulse.id === id ? " clicked" : ""}`;
+  const iconKey = (id: View) => (pulse.id === id ? pulse.n : `s-${id}`);
 
   // Cursor-proximity border glow on cards + download rows.
   useEffect(() => initCursorFx(), []);
@@ -42,6 +57,17 @@ function Shell() {
   // running and "minimize to tray" off — show the quit prompt.
   useEffect(() => {
     const un = subscribeConfirmQuit(() => setQuitPrompt(true));
+    return () => {
+      un.then((u) => u());
+    };
+  }, []);
+
+  // Easter egg: whenever a download is added, drop the arrow into the tray on the
+  // Downloads rail icon — even when you're on another page.
+  useEffect(() => {
+    const un = subscribeTaskAdded(() =>
+      setPulse((p) => ({ id: "downloads", n: p.n + 1 })),
+    );
     return () => {
       un.then((u) => u());
     };
@@ -88,19 +114,20 @@ function Shell() {
             return (
               <button
                 key={n.id}
-                className="rail-btn"
+                className={railClass(n.id)}
                 aria-current={view === n.id}
                 aria-label={n.label}
                 title={n.label}
-                onClick={() => setView(n.id)}
+                onClick={() => goto(n.id)}
               >
-                <Icon size={20} />
+                <Icon key={iconKey(n.id)} size={20} />
               </button>
             );
           })}
         </nav>
 
         <div className="rail-foot">
+          <RailAccentPicker accent={accent} setAccent={setAccent} />
           <button
             className="rail-btn"
             onClick={toggleTheme}
@@ -112,13 +139,13 @@ function Shell() {
             <ThemeToggleIcon size={20} />
           </button>
           <button
-            className="rail-btn"
+            className={railClass("settings")}
             aria-current={view === "settings"}
             aria-label="Settings"
             title="Settings"
-            onClick={() => setView("settings")}
+            onClick={() => goto("settings")}
           >
-            <SettingsIcon size={20} />
+            <SettingsIcon key={iconKey("settings")} size={20} />
           </button>
         </div>
       </aside>
@@ -126,9 +153,7 @@ function Shell() {
       <main className="main">
         {view === "downloads" && <DownloadsView />}
         {view === "categories" && <CategoriesView />}
-        {view === "settings" && (
-          <SettingsView accent={accent} setAccent={setAccent} />
-        )}
+        {view === "settings" && <SettingsView />}
       </main>
 
       {quitPrompt && (

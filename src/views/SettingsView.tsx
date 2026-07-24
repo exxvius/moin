@@ -7,18 +7,12 @@ import { Switch } from "../components/Switch";
 import { api } from "../lib/api";
 import { subscribeToolProgress } from "../lib/events";
 import { formatBytes } from "../lib/format";
-import { ACCENTS, type Accent } from "../lib/accent";
 import type { BackendInfo, Settings, ToolStatus, UpdateInfo } from "../lib/types";
 
 /** The author's profile, credited at the bottom of the settings view. */
 const AUTHOR_URL = "https://github.com/exxvius";
 /** Upstream of the built-in BitTorrent engine, credited in the About card. */
 const RQBIT_URL = "https://github.com/ikatson/rqbit";
-
-interface Props {
-  accent: Accent;
-  setAccent: (a: Accent) => void;
-}
 
 // 0 = unlimited; the rest are sensible concurrency caps.
 const CONCURRENCY_OPTIONS = [0, 1, 2, 3, 4, 5, 6, 8, 10, 16];
@@ -83,7 +77,7 @@ function secondsLabel(n: number): string {
   return `${n} seconds`;
 }
 
-export function SettingsView({ accent, setAccent }: Props) {
+export function SettingsView() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [backends, setBackends] = useState<BackendInfo[]>([]);
   const [tool, setTool] = useState<ToolStatus | null>(null);
@@ -232,39 +226,6 @@ export function SettingsView({ accent, setAccent }: Props) {
       <div className="view-head">
         <h2>Settings</h2>
         <p>Make moin yours.</p>
-      </div>
-
-      <div className="card">
-        <div className="card-title">Appearance</div>
-
-        <div className="setting-row">
-          <div>
-            <div className="setting-label">Accent color</div>
-            <div className="dim">
-              Recolors backgrounds, buttons, and progress. Light and dark is in
-              the sidebar.
-            </div>
-          </div>
-          <Select
-            value={accent}
-            ariaLabel="Accent color"
-            caret
-            onChange={(v) => setAccent(v as Accent)}
-            options={ACCENTS.map((a) => ({
-              value: a.id,
-              label: (
-                <span className="accent-option">
-                  <span
-                    className="accent-dot"
-                    style={{ background: a.swatch }}
-                  />
-                  {a.label}
-                </span>
-              ),
-            }))}
-          />
-        </div>
-
       </div>
 
       <div className="card">
@@ -831,13 +792,13 @@ export function SettingsView({ accent, setAccent }: Props) {
               onFocus={(e) => e.currentTarget.select()}
             />
             <button
-              className="dl-btn"
+              className="btn"
               onClick={copyToken}
               disabled={!settings?.rpc_token}
             >
               {tokenCopied ? "Copied" : "Copy"}
             </button>
-            <button className="dl-btn" onClick={regenerateToken} disabled={!settings}>
+            <button className="btn" onClick={regenerateToken} disabled={!settings}>
               Regenerate
             </button>
           </div>
@@ -859,7 +820,7 @@ export function SettingsView({ accent, setAccent }: Props) {
           <div className="tool-actions">
             {tool?.can_fetch && (
               <button
-                className="dl-btn"
+                className="btn"
                 onClick={downloadTool}
                 disabled={fetching !== null}
               >
@@ -871,7 +832,7 @@ export function SettingsView({ accent, setAccent }: Props) {
               </button>
             )}
             <button
-              className="dl-btn"
+              className="btn"
               onClick={pickBinary}
               disabled={fetching !== null}
             >
@@ -879,7 +840,7 @@ export function SettingsView({ accent, setAccent }: Props) {
             </button>
             {tool?.source === "override" && (
               <button
-                className="dl-btn danger"
+                className="btn danger"
                 onClick={clearBinary}
                 disabled={fetching !== null}
               >
@@ -1015,13 +976,13 @@ function AboutCard() {
         </div>
         {update?.available ? (
           <button
-            className="dl-btn"
+            className="btn"
             onClick={() => openUrl(update.asset_url ?? update.page_url).catch(() => {})}
           >
             Get the update
           </button>
         ) : (
-          <button className="dl-btn" onClick={check} disabled={checking}>
+          <button className="btn" onClick={check} disabled={checking}>
             {checking ? "Checking…" : "Check for updates"}
           </button>
         )}

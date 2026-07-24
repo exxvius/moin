@@ -1471,7 +1471,7 @@ export function DownloadsView() {
               <div className="modal-title">That didn't work</div>
               <div className="modal-body">{error}</div>
               <div className="modal-actions">
-                <button className="btn-primary" onClick={() => setError(null)}>
+                <button className="btn primary" onClick={() => setError(null)}>
                   OK
                 </button>
               </div>

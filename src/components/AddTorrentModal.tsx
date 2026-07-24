@@ -301,7 +301,7 @@ export function AddTorrentModal({ source, onClose }: Props) {
                 <span className="tm-folder-path path selectable" title={dir}>
                   {dir}
                 </span>
-                <button type="button" className="dl-btn" onClick={pickFolder}>
+                <button type="button" className="btn" onClick={pickFolder}>
                   Browse…
                 </button>
               </div>
@@ -329,11 +329,11 @@ export function AddTorrentModal({ source, onClose }: Props) {
         {preview?.duplicate ? (
           <div className="add-modal-foot">
             <div className="add-modal-actions">
-              <button className="dl-btn" onClick={onClose} disabled={busy}>
+              <button className="btn ghost" onClick={onClose} disabled={busy}>
                 Skip
               </button>
               <button
-                className="btn-primary"
+                className="btn primary"
                 onClick={mergeTrackers}
                 disabled={busy}
               >
@@ -369,11 +369,11 @@ export function AddTorrentModal({ source, onClose }: Props) {
               />
             )}
             <div className="add-modal-actions">
-              <button className="dl-btn" onClick={onClose} disabled={busy}>
+              <button className="btn ghost" onClick={onClose} disabled={busy}>
                 Cancel
               </button>
               <button
-                className="btn-primary"
+                className="btn primary"
                 onClick={add}
                 disabled={!preview || busy || selectedCount === 0}
               >

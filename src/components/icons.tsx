@@ -76,12 +76,36 @@ export function AddIcon({ size = 24 }: IconProps) {
   );
 }
 
+/** Split into the arrow and the tray so a click can drop the arrow through the
+ *  tray and loop it back from the top — see `.dl-arrow` in moin.css. The tray is
+ *  drawn last so it sits in front of the arrow as it passes behind. */
 export function DownloadsIcon({ size = 24 }: IconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      style={{ overflow: "hidden" }}
+    >
+      <defs>
+        {/* Fixed clip at the tray's mouth: the arrow (which moves inside this
+         *  group) vanishes here as it drops in, never showing below the tray. */}
+        <clipPath id="dl-tray-clip">
+          <rect x="0" y="0" width="24" height="17" />
+        </clipPath>
+      </defs>
+      <g clipPath="url(#dl-tray-clip)">
+        <path
+          className="dl-arrow"
+          fill="currentColor"
+          d="m12 16l-5-5l1.4-1.45l2.6 2.6V4h2v8.15l2.6-2.6L17 11z"
+        />
+      </g>
       <path
+        className="dl-tray"
         fill="currentColor"
-        d="m12 16l-5-5l1.4-1.45l2.6 2.6V4h2v8.15l2.6-2.6L17 11zm-6 4q-.825 0-1.412-.587T4 18v-3h2v3h12v-3h2v3q0 .825-.587 1.413T18 20z"
+        d="M6 20q-.825 0-1.412-.587T4 18v-3h2v3h12v-3h2v3q0 .825-.587 1.413T18 20z"
       />
     </svg>
   );
@@ -99,13 +123,31 @@ export function CompletedIcon({ size = 24 }: IconProps) {
 }
 
 /** The Categories rail mark: a triangle, circle, and square — three shapes for
- *  three buckets. */
+ *  three buckets. Each is its own path (with its inner cutout) so a click can
+ *  tilt and spread them apart, then spring back — see `.cat-shape` in moin.css. */
 export function CategoriesIcon({ size = 24 }: IconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      style={{ overflow: "visible" }}
+    >
       <path
+        className="cat-shape cat-tri"
         fill="currentColor"
-        d="M6.5 11L12 2l5.5 9zm11 11q-1.875 0-3.187-1.312T13 17.5t1.313-3.187T17.5 13t3.188 1.313T22 17.5t-1.312 3.188T17.5 22M3 21.5v-8h8v8zM17.5 20q1.05 0 1.775-.725T20 17.5t-.725-1.775T17.5 15t-1.775.725T15 17.5t.725 1.775T17.5 20M5 19.5h4v-4H5zM10.05 9h3.9L12 5.85z"
+        d="M6.5 11L12 2l5.5 9zM10.05 9h3.9L12 5.85z"
+      />
+      <path
+        className="cat-shape cat-circ"
+        fill="currentColor"
+        d="M17.5 22q-1.875 0-3.187-1.312T13 17.5t1.313-3.187T17.5 13t3.188 1.313T22 17.5t-1.312 3.188T17.5 22M17.5 20q1.05 0 1.775-.725T20 17.5t-.725-1.775T17.5 15t-1.775.725T15 17.5t.725 1.775T17.5 20"
+      />
+      <path
+        className="cat-shape cat-sq"
+        fill="currentColor"
+        d="M3 21.5v-8h8v8zM5 19.5h4v-4H5z"
       />
     </svg>
   );
@@ -120,10 +162,12 @@ export function DragHandleIcon({ size = 24 }: IconProps) {
   );
 }
 
+/** The cog spins a full turn on click — see `.cog` in moin.css. */
 export function SettingsIcon({ size = 24 }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
       <path
+        className="cog"
         fill="currentColor"
         d="M12 8a4 4 0 0 1 4 4a4 4 0 0 1-4 4a4 4 0 0 1-4-4a4 4 0 0 1 4-4m0 2a2 2 0 0 0-2 2a2 2 0 0 0 2 2a2 2 0 0 0 2-2a2 2 0 0 0-2-2m-2 12c-.25 0-.46-.18-.5-.42l-.37-2.65c-.63-.25-1.17-.59-1.69-.99l-2.49 1.01c-.22.08-.49 0-.61-.22l-2-3.46a.493.493 0 0 1 .12-.64l2.11-1.66L4.5 12l.07-1l-2.11-1.63a.493.493 0 0 1-.12-.64l2-3.46c.12-.22.39-.31.61-.22l2.49 1c.52-.39 1.06-.73 1.69-.98l.37-2.65c.04-.24.25-.42.5-.42h4c.25 0 .46.18.5.42l.37 2.65c.63.25 1.17.59 1.69.98l2.49-1c.22-.09.49 0 .61.22l2 3.46c.13.22.07.49-.12.64L19.43 11l.07 1l-.07 1l2.11 1.63c.19.15.25.42.12.64l-2 3.46c-.12.22-.39.31-.61.22l-2.49-1c-.52.39-1.06.73-1.69.98l-.37 2.65c-.04.24-.25.42-.5.42zm1.25-18l-.37 2.61c-1.2.25-2.26.89-3.03 1.78L5.44 7.35l-.75 1.3L6.8 10.2a5.55 5.55 0 0 0 0 3.6l-2.12 1.56l.75 1.3l2.43-1.04c.77.88 1.82 1.52 3.01 1.76l.37 2.62h1.52l.37-2.61c1.19-.25 2.24-.89 3.01-1.77l2.43 1.04l.75-1.3l-2.12-1.55c.4-1.17.4-2.44 0-3.61l2.11-1.55l-.75-1.3l-2.41 1.04a5.42 5.42 0 0 0-3.03-1.77L12.75 4z"
       />

@@ -206,7 +206,7 @@ export function CategoriesView() {
           </p>
         </div>
         <button
-          className="btn-primary"
+          className="btn primary"
           onClick={() => setEditing(blankCategory())}
         >
           New category
@@ -273,11 +273,11 @@ export function CategoriesView() {
                     )}
                   </div>
                   <div className="cat-row-actions">
-                    <button className="dl-btn" onClick={() => setEditing(c)}>
+                    <button className="btn" onClick={() => setEditing(c)}>
                       Edit
                     </button>
                     <button
-                      className="dl-btn danger"
+                      className="btn danger"
                       onClick={() => setConfirmDelete(c)}
                     >
                       Delete
@@ -314,7 +314,7 @@ export function CategoriesView() {
           </div>
           <div className="cat-row-actions">
             <button
-              className="dl-btn"
+              className="btn"
               disabled={!settings}
               onClick={pickUncatFolder}
             >
@@ -322,7 +322,7 @@ export function CategoriesView() {
             </button>
             {settings?.download_dir && (
               <button
-                className="dl-btn danger"
+                className="btn danger"
                 onClick={() => setUncatFolder(null)}
               >
                 Clear
@@ -386,11 +386,11 @@ function FolderRow({
         {value && <div className="dim path cat-savedir">{value}</div>}
       </div>
       <div className="tool-actions">
-        <button className="dl-btn" onClick={onPick}>
+        <button className="btn" onClick={onPick}>
           {value ? "Change…" : "Choose…"}
         </button>
         {value && (
-          <button className="dl-btn danger" onClick={onClear}>
+          <button className="btn danger" onClick={onClear}>
             Clear
           </button>
         )}
@@ -681,12 +681,12 @@ function CategoryEditor({ initial, onSave, onCancel }: EditorProps) {
               )}
             </div>
             <div className="tool-actions">
-              <button className="dl-btn" onClick={pickFolder}>
+              <button className="btn" onClick={pickFolder}>
                 {draft.save_dir ? "Change…" : "Choose…"}
               </button>
               {draft.save_dir && (
                 <button
-                  className="dl-btn danger"
+                  className="btn danger"
                   onClick={() => patch({ save_dir: null })}
                 >
                   Clear
@@ -783,7 +783,7 @@ function CategoryEditor({ initial, onSave, onCancel }: EditorProps) {
                         {folder}
                       </span>
                       <button
-                        className="dl-btn danger"
+                        className="btn danger"
                         aria-label="Remove folder"
                         onClick={() => removeWatchFolder(i)}
                       >
@@ -792,7 +792,7 @@ function CategoryEditor({ initial, onSave, onCancel }: EditorProps) {
                     </div>
                   ))}
                 </div>
-                <button className="dl-btn add-trigger" onClick={addWatchFolder}>
+                <button className="btn add-trigger" onClick={addWatchFolder}>
                   Add folder
                 </button>
               </div>
@@ -825,7 +825,7 @@ function CategoryEditor({ initial, onSave, onCancel }: EditorProps) {
                 />
               ))}
             </div>
-            <button className="dl-btn add-trigger" onClick={addTrigger}>
+            <button className="btn add-trigger" onClick={addTrigger}>
               Add trigger
             </button>
           </div>
@@ -894,11 +894,11 @@ function CategoryEditor({ initial, onSave, onCancel }: EditorProps) {
         </div>
 
         <div className="modal-actions">
-          <button className="dl-btn" onClick={onCancel}>
+          <button className="btn ghost" onClick={onCancel}>
             Cancel
           </button>
           <button
-            className="btn-primary"
+            className="btn primary"
             disabled={!canSave}
             onClick={() => onSave(draft)}
           >
@@ -946,7 +946,7 @@ function TriggerRow({
       <div className="trigger-fields">
         <TriggerFields trigger={trigger} onChange={onChange} />
       </div>
-      <button className="dl-btn danger" aria-label="Remove trigger" onClick={onRemove}>
+      <button className="btn danger" aria-label="Remove trigger" onClick={onRemove}>
         Remove
       </button>
     </div>

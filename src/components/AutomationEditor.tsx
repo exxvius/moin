@@ -124,7 +124,7 @@ export function AutomationEditor({ automation, onChange }: Props) {
                 <ExclusionFields rule={rule} onChange={(r) => setExclusion(i, r)} />
               </div>
               <button
-                className="dl-btn danger"
+                className="btn danger"
                 aria-label="Remove exclusion"
                 onClick={() => removeExclusion(i)}
               >
@@ -133,7 +133,7 @@ export function AutomationEditor({ automation, onChange }: Props) {
             </div>
           ))}
         </div>
-        <button className="dl-btn add-trigger" onClick={addExclusion}>
+        <button className="btn add-trigger" onClick={addExclusion}>
           Add exclusion
         </button>
       </div>
@@ -158,7 +158,7 @@ export function AutomationEditor({ automation, onChange }: Props) {
                 <RenameFields rule={rule} onChange={(r) => setRename(i, r)} />
               </div>
               <button
-                className="dl-btn danger"
+                className="btn danger"
                 aria-label="Remove rename rule"
                 onClick={() => removeRename(i)}
               >
@@ -167,7 +167,7 @@ export function AutomationEditor({ automation, onChange }: Props) {
             </div>
           ))}
         </div>
-        <button className="dl-btn add-trigger" onClick={addRename}>
+        <button className="btn add-trigger" onClick={addRename}>
           Add rename rule
         </button>
       </div>
