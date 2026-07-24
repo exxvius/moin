@@ -623,7 +623,10 @@ export function DownloadsView() {
     [store.all, store.speeds],
   );
   const downloadingCount = useMemo(
-    () => store.all.filter((t) => t.status === "downloading").length,
+    // Count only what's actually in the list — an archived task can briefly still
+    // read "downloading" (a late progress tick lands as its run loop winds down),
+    // which otherwise made this exceed the "in list" total.
+    () => store.all.filter((t) => !t.archived && t.status === "downloading").length,
     [store.all],
   );
 

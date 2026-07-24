@@ -2219,12 +2219,11 @@
   flex: none;
   --tint-start: 0%;
   --tint-end: 45%;
-  /* The border carries a faint tint of the category's icon color at rest
-     (--cat-glow is set only when the category has a color); hover/select brighten
-     it. Uncategorized cards keep the neutral border. The background tint uses the
-     category's main color separately (--cat, on the ::before overlay). */
-  border: 1px solid
-    color-mix(in oklab, var(--cat-glow, transparent) 24%, var(--glass-border));
+  /* No border at rest — the card reads as a clean surface; hover/select bring the
+     outline in (tinted by the category's icon color, else the accent). The 1px width
+     stays transparent so nothing shifts when the border appears. The background tint
+     uses the category's main color separately (--cat, on the ::before overlay). */
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: var(--glass-bg);
   box-shadow: var(--glass-highlight);
@@ -2431,7 +2430,9 @@
    darker accent is the base and the accent marks where 1.0 sits. */
 .mini-bar.ratio {
   --bar-main: var(--accent);
-  --bar-dark: oklch(from var(--accent) calc(l - 0.18) calc(c + 0.015) h);
+  /* The ratio shade is a good deal darker than the accent so the split reads
+     strongly against the flat base. */
+  --bar-dark: oklch(from var(--accent) calc(l - 0.32) calc(c + 0.02) h);
   --base-c: var(--bar-main);
   --over-c: var(--bar-dark);
 }
@@ -2439,16 +2440,11 @@
   --base-c: var(--bar-dark);
   --over-c: var(--bar-main);
 }
+/* Seeding: a solid, flat accent bar (no gradient) — the ratio <b> overlay fills it
+   from the left in the darker shade up to the split. */
 .mini-bar.ratio > i {
   width: 100%;
-  background-image:
-    linear-gradient(
-      100deg,
-      oklch(from var(--base-c) calc(l - 0.03) c calc(h - 14)) 0%,
-      oklch(from var(--base-c) calc(l + 0.03) c calc(h + 14)) 100%
-    ),
-    linear-gradient(180deg, oklch(100% 0 0 / 0.18), transparent 60%);
-  background-size: 100% 100%;
+  background: var(--base-c);
   box-shadow: 0 0 8px color-mix(in oklab, var(--base-c) 40%, transparent);
 }
 .mini-bar.ratio > b {
@@ -2460,24 +2456,13 @@
   /* Rounded on the left to match the track start, flat on the right so the two
      colours meet at a clean line. */
   border-radius: 999px 0 0 999px;
-  background-image:
-    linear-gradient(
-      100deg,
-      oklch(from var(--over-c) calc(l - 0.03) c calc(h - 14)) 0%,
-      oklch(from var(--over-c) calc(l + 0.03) c calc(h + 14)) 100%
-    ),
-    linear-gradient(180deg, oklch(100% 0 0 / 0.18), transparent 60%);
-  background-repeat: no-repeat;
-  background-position: left center;
-  background-size:
-    calc(100% / max(var(--r, 1), 0.0001)) 100%,
-    100% 100%;
+  background: var(--over-c);
   box-shadow: 1px 0 5px -1px color-mix(in oklab, var(--over-c) 55%, transparent);
   /* Linear so the ratio split glides smoothly rather than snapping. */
   transition: width var(--duration) linear;
 }
 .mini-pct.ratio {
-  color: oklch(from var(--accent) calc(l - 0.18) calc(c + 0.015) h);
+  color: oklch(from var(--accent) calc(l - 0.32) calc(c + 0.02) h);
   font-weight: 600;
 }
 
