@@ -14,6 +14,7 @@ import { QuitConfirmModal } from "./components/QuitConfirmModal";
 import { RailAccentPicker } from "./components/RailAccentPicker";
 import { StoreProvider } from "./lib/store";
 import { initCursorFx } from "./lib/cursor";
+import { usePerfMode } from "./lib/perfMode";
 import { subscribeConfirmQuit, subscribeTaskAdded } from "./lib/events";
 import { api } from "./lib/api";
 import { useTheme } from "./lib/theme";
@@ -33,6 +34,7 @@ const NAV: {
 function Shell() {
   const [theme, toggleTheme] = useTheme();
   const [accent, setAccent] = useAccent();
+  const perf = usePerfMode();
   const [view, setView] = useState<View>("downloads");
   const [quitPrompt, setQuitPrompt] = useState(false);
   // Which rail icon last got clicked + a bump counter, so re-clicking replays its
@@ -50,8 +52,13 @@ function Shell() {
   const railClass = (id: View) => `rail-btn${pulse.id === id ? " clicked" : ""}`;
   const iconKey = (id: View) => (pulse.id === id ? pulse.n : `s-${id}`);
 
-  // Cursor-proximity border glow on cards + download rows.
-  useEffect(() => initCursorFx(), []);
+  // Cursor-proximity border glow on cards + download rows. Performance mode skips
+  // the whole thing — the listener, the rAF loop and the per-card style writes —
+  // rather than just hiding the result in CSS.
+  useEffect(() => {
+    if (perf) return;
+    return initCursorFx();
+  }, [perf]);
 
   // The backend asks for confirmation when the window is closed with transfers
   // running and "minimize to tray" off — show the quit prompt.
@@ -96,12 +103,17 @@ function Shell() {
 
   return (
     <div className="app">
-      <div className="lava" aria-hidden="true">
-        <i />
-        <i />
-        <i />
-        <i />
-      </div>
+      {/* Ambient background blobs. Each is a full-viewport compositor layer while
+          it drifts, so performance mode drops them from the tree entirely rather
+          than hiding them — a hidden layer can still be resident. */}
+      {!perf && (
+        <div className="lava" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+          <i />
+        </div>
+      )}
 
       <aside className="rail">
         <div className="rail-brand" title="moin">

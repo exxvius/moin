@@ -25,6 +25,7 @@ import { MultiSelect } from "../components/MultiSelect";
 import { SmoothScroll } from "../components/SmoothScroll";
 import { ContextMenu, type MenuEntry } from "../components/ContextMenu";
 import { useListSelection } from "../lib/useListSelection";
+import { usePerfMode } from "../lib/perfMode";
 import { useStore, type MoveProgress } from "../lib/store";
 import { categorySwatch, findCategory } from "../lib/categories";
 import { CategoryIcon } from "../components/CategoryIcon";
@@ -403,7 +404,12 @@ const REORDER_COOLDOWN_MS = 1000;
 // expanded card's extra height is measured at runtime.
 const ROW_COLLAPSED = 56; // .dl-card collapsed height fallback (measured at runtime)
 const ROW_GAP = 12; // --space-3 between rows
-const V_BUFFER = 8; // rows kept mounted above/below the viewport
+// Rows kept mounted above/below the viewport. The buffer trades mount work for
+// blank space during a fast flick; performance mode takes the smaller buffer,
+// since mounting and unmounting rows is the per-scroll cost that grows with how
+// much each row renders.
+const V_BUFFER = 8;
+const V_BUFFER_PERF = 3;
 
 // Reconcile the target sort order against the current display order: any row that
 // moved within the cooldown stays pinned to its slot, and the rest sort freely
@@ -441,6 +447,8 @@ function reorderWithCooldown(
 
 export function DownloadsView() {
   const store = useStore();
+  // Performance mode trims what each row renders and how many are kept mounted.
+  const perf = usePerfMode();
   // Multi-select status filter. "all" is a reset: picking it clears the rest;
   // picking any specific status drops "all". Never empty (falls back to "all").
   const [statusSel, setStatusSel] = useState<Set<FilterId>>(loadStatusSel);
@@ -594,8 +602,9 @@ export function DownloadsView() {
     if (y < top + stride + expandedExtra) return vExpandedIdx;
     return Math.floor((y - expandedExtra) / stride);
   };
-  const vStart = Math.max(0, indexAt(scrollTop) - V_BUFFER);
-  const vEnd = Math.min(vTotal, indexAt(scrollTop + viewportH) + V_BUFFER + 1);
+  const vBuffer = perf ? V_BUFFER_PERF : V_BUFFER;
+  const vStart = Math.max(0, indexAt(scrollTop) - vBuffer);
+  const vEnd = Math.min(vTotal, indexAt(scrollTop + viewportH) + vBuffer + 1);
   const visible = displayed.slice(vStart, vEnd);
   const topSpacer = offsetOf(vStart);
   const bottomSpacer = Math.max(0, contentH - offsetOf(vEnd));
@@ -1365,6 +1374,7 @@ export function DownloadsView() {
                 columns={columns}
                 gridTemplate={gridTemplate}
                 categories={store.categories}
+                perf={perf}
                 onContext={openMenu}
               />
             ))}
@@ -1599,6 +1609,8 @@ interface CardProps {
   columns: Column[];
   gridTemplate: string;
   categories: Category[];
+  /** Performance mode: render the row's cheapest form (see `metric` below). */
+  perf: boolean;
   onContext: (e: ReactMouseEvent, task: Task) => void;
 }
 
@@ -1612,6 +1624,7 @@ function Card({
   columns,
   gridTemplate,
   categories,
+  perf,
   onContext,
 }: CardProps) {
   const cat = findCategory(categories, task.category);
@@ -1651,6 +1664,14 @@ function Card({
     barDelay.current = null;
   }
 
+  // Marks the down/up/seeders metrics under a torrent's name. Performance mode
+  // swaps each lucide icon for a one-letter tag: an icon is an <svg> with two or
+  // three vector children to build and paint, three of them per torrent row, on
+  // every row that scrolls into view. The letters carry the same meaning (and keep
+  // the same colour coding) for a fraction of the nodes.
+  const mark = (tag: string, icon: ReactNode): ReactNode =>
+    perf ? <span className="tl-tag">{tag}</span> : icon;
+
   // One cell per column id — the visible columns (and their order) drive both
   // the header and this row, so adding a column is a one-line change up top.
   const cellFor = (id: SortKey): ReactNode => {
@@ -1679,7 +1700,7 @@ function Card({
                   <span
                     className={`tl-metric${dl && speed > 0 ? " tl-down" : ""}`}
                   >
-                    <ArrowDown size={12} strokeWidth={2.5} />
+                    {mark("D", <ArrowDown size={12} strokeWidth={2.5} />)}
                     {formatSpeed(dl ? speed : 0)}
                   </span>
                   <span
@@ -1687,7 +1708,7 @@ function Card({
                       (task.up_speed ?? 0) > 0 ? " tl-up" : ""
                     }`}
                   >
-                    <ArrowUp size={12} strokeWidth={2.5} />
+                    {mark("U", <ArrowUp size={12} strokeWidth={2.5} />)}
                     {formatSpeed(task.up_speed ?? 0)}
                   </span>
                   <span
@@ -1695,7 +1716,7 @@ function Card({
                       (task.seeders ?? 0) > 0 ? " tl-seeders" : ""
                     }`}
                   >
-                    <Sprout size={12} strokeWidth={2.5} />
+                    {mark("S", <Sprout size={12} strokeWidth={2.5} />)}
                     {task.seeders ?? 0}
                   </span>
                 </span>

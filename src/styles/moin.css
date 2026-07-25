@@ -2768,6 +2768,14 @@
 .tl-metric svg {
   opacity: 0.9;
 }
+/* Performance mode's stand-in for the metric icons — same meaning, one text node
+   instead of an SVG. Sized to roughly the icon's footprint so the line doesn't
+   reflow when the mode is toggled. */
+.tl-tag {
+  min-width: 9px;
+  font-weight: 700;
+  opacity: 0.75;
+}
 .tl-down {
   color: var(--ok);
 }

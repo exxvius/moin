@@ -188,6 +188,9 @@ export interface Settings {
   peer_connect_timeout_secs: number;
   /** How many ports past the listen port to try if it's busy. */
   torrent_port_span: number;
+  /** How often the batched progress event reaches the UI, in milliseconds. Read
+   *  live by the backend flusher, so a change applies from the next tick. */
+  progress_flush_ms: number;
 }
 
 export interface BackendInfo {

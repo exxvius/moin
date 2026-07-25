@@ -13,7 +13,6 @@ pub mod rpc;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -22,9 +21,6 @@ use tauri::{AppHandle, Emitter as _, Manager};
 use crate::commands::AppState;
 use crate::core::engine::{Emitter, Engine};
 use crate::core::task::{Task, TaskProgress};
-
-/// How often the coalesced progress buffer is flushed to the UI as one event.
-const PROGRESS_FLUSH_MS: u64 = 250;
 
 /// Bring the main window back to the foreground — shared by the tray, the tray
 /// menu, and the single-instance relaunch handler.
@@ -130,15 +126,20 @@ impl Emitter for AppEmitter {
 /// Drain the buffered progress ticks on a timer and emit them as one event. Runs
 /// on Tauri's own runtime so it's always active (never gated on capturing the
 /// engine's runtime handle), which also means the buffer can't grow unbounded.
+///
+/// The cadence is re-read from settings before every sleep rather than fixed at a
+/// `tokio::time::interval`, so changing it in the UI applies from the next tick
+/// with no restart. Sleeping (rather than ticking) also means a slower cadence
+/// never accumulates a backlog of missed ticks to fire back-to-back.
 fn spawn_progress_flusher(
     app: AppHandle,
+    engine: Engine,
     buf: Arc<Mutex<HashMap<String, TaskProgress>>>,
     last_sent: Arc<Mutex<HashMap<String, TaskProgress>>>,
 ) {
     tauri::async_runtime::spawn(async move {
-        let mut ticker = tokio::time::interval(Duration::from_millis(PROGRESS_FLUSH_MS));
         loop {
-            ticker.tick().await;
+            tokio::time::sleep(engine.settings().progress_flush_interval()).await;
             let batch: Vec<TaskProgress> = {
                 let mut b = buf.lock().unwrap();
                 if b.is_empty() {
@@ -205,7 +206,13 @@ pub fn run() {
 
             // Coalesce progress ticks into one periodic event so IPC stays flat as
             // the number of active torrents grows (and the buffer never piles up).
-            spawn_progress_flusher(app.handle().clone(), progress_buf, last_sent);
+            // Takes the engine so it can read the (user-adjustable) cadence live.
+            spawn_progress_flusher(
+                app.handle().clone(),
+                engine.clone(),
+                progress_buf,
+                last_sent,
+            );
 
             // Start the loopback RPC server the browser extension talks to. It
             // needs the OS Downloads folder as the fallback destination (the same

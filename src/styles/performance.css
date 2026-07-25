@@ -1,0 +1,219 @@
+/* Performance mode — the whole visual layer, off.
+   Toggled from Settings ▸ General; sets `data-perf` on <html> (see lib/perfMode.ts).
+
+   The target is a window holding thousands of tasks. Virtualization caps how many
+   rows are mounted, but every effect a row carries still costs per painted frame,
+   and several of them promote a compositor layer each. This file removes the ones
+   that multiply by row count first, and the ambient ones second:
+
+     - backdrop-filter (each blurred surface reads back what's behind it)
+     - looping animations, including the per-row progress shimmer and edge glow
+     - transitions, including the registered-property tint sweep on every row
+     - blurred box-shadows and filters (a blur kernel per row, per paint)
+     - gradients where a flat fill reads the same
+     - the cursor-proximity border glow (its rAF loop is skipped entirely in JS)
+     - the ambient background blobs (not rendered at all — see App.tsx)
+
+   Loaded last so these win on equal specificity, but most rules still carry
+   !important: they're overriding declarations that live on more specific
+   selectors (`.dl-card:hover`, `.mini-bar.live > i`) rather than on `*`.
+
+   What deliberately stays: anything carrying information. Selection rings, status
+   colours, category tints and stripes, progress fills, and the one modal spinner
+   all survive — a frozen spinner or an invisible selection reads as a bug, not as
+   a fast app. */
+
+/* ---- Tokens: one override each, and every rule using them goes flat ----
+   Every token here is also declared by the theme blocks in tokens.css, on
+   `:root[data-theme="…"]` — the same specificity this selector has in source, but
+   the CSS minifier rewrites `:root[data-perf]` to `[data-perf]`, which is one
+   step lower. These would then quietly lose to the theme. `!important` is what
+   makes the override hold regardless of how the selector is rewritten. */
+:root[data-perf] {
+  /* Motion tokens feed `transition`/`animation` shorthands all over the app. */
+  --duration-fast: 0ms !important;
+  --duration: 0ms !important;
+
+  /* Flat, opaque surfaces instead of layered glass gradients.
+     Opaque matters: the pinned list header is translucent by design and relies on
+     its backdrop blur to stay legible over rows scrolling underneath. With the
+     blur gone it would simply be see-through, so the elevation colour is backed
+     by the page background here — which also lets the compositor skip everything
+     behind these surfaces.
+     Both layers are written as single-colour gradients rather than plain colours
+     because some rules stack this token with a further layer
+     (`background: var(--glass-bg), <colour>`), and a colour anywhere but last in
+     a background list invalidates the whole declaration. */
+  --glass-bg:
+    linear-gradient(var(--bg-elev), var(--bg-elev)),
+    linear-gradient(var(--bg), var(--bg)) !important;
+
+  /* Shadow tokens are written as no-op shadows rather than `none`: several rules
+     use them inside a comma-separated box-shadow list, where a bare `none` makes
+     the whole declaration invalid and drops the shadows meant to survive. */
+  --glass-highlight: 0 0 0 0 transparent !important;
+  --glass-shadow: 0 0 0 0 transparent !important;
+  --header-shadow: 0 0 0 0 transparent !important;
+  --shadow: 0 0 0 0 transparent !important;
+  --accent-glow: 0 0 0 0 transparent !important;
+  --control-shadow: 0 0 0 0 transparent !important;
+  --track-shadow: 0 0 0 0 transparent !important;
+}
+
+/* ---- Motion and glass, everywhere ---- */
+:root[data-perf] *,
+:root[data-perf] *::before,
+:root[data-perf] *::after {
+  animation: none !important;
+  transition: none !important;
+  /* Nothing is animating, so no element should hold a permanent layer. */
+  will-change: auto !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* The magnet-resolving spinner is the exception: it's one element in a modal,
+   it's a compositor-only rotation, and a stopped spinner reads as a hang. */
+:root[data-perf] .tm-spinner {
+  animation: tm-spin 0.7s linear infinite !important;
+}
+
+/* ---- Cursor-proximity border glow ----
+   The ring is a masked radial gradient that repaints as the pointer moves. Its
+   rAF loop doesn't run in performance mode, so nothing would refresh --glow —
+   drop the pseudo-element outright so a stale value can't leave a row lit after
+   the toggle. (`.cat-card::after` is NOT this ring; it's the category's identity
+   stripe, so it stays.) */
+:root[data-perf] .card:not(.card-flat)::after,
+:root[data-perf] .card-flat.card-glow::after,
+:root[data-perf] .dl-card::after {
+  display: none !important;
+}
+
+/* ---- Download rows ----
+   Hover keeps its tinted border, selection keeps a crisp 1px ring; both drop the
+   blurred outer glow, which is the part that costs a blur pass per row. */
+:root[data-perf] .dl-card:hover {
+  box-shadow: none !important;
+}
+:root[data-perf] .dl-card.selected {
+  box-shadow: 0 0 0 1px
+    color-mix(in oklab, var(--cat-glow, var(--accent)) 45%, transparent) !important;
+}
+:root[data-perf] .cat-card:hover {
+  box-shadow: none !important;
+}
+
+/* ---- Progress bars ----
+   The live bar is the single most-multiplied effect in the app: a flowing
+   shimmer that repaints (it animates background-position) plus a blurred
+   leading-edge glow on its own layer, for every downloading row on screen. Both
+   go; the fill itself stays, in its normal two-end colour. */
+:root[data-perf] .mini-bar.live > i {
+  background-image: linear-gradient(100deg, var(--bar-a) 0%, var(--bar-b) 100%);
+  background-size: 100% 100%;
+}
+:root[data-perf] .mini-bar.live::after {
+  display: none !important;
+}
+:root[data-perf] .mini-bar > i,
+:root[data-perf] .dl-bar > i {
+  box-shadow: none !important;
+}
+
+/* Indeterminate bars read as motion — with the slide gone, a 35% stub parked at
+   the left edge would look like real progress. A dimmed full track says "working,
+   length unknown" without moving. */
+:root[data-perf] .mini-bar.indeterminate > i,
+:root[data-perf] .dl-bar.indeterminate > i {
+  width: 100%;
+  opacity: 0.4;
+}
+
+/* ---- Text shaping ----
+   optimizeLegibility turns on kerning and ligatures for every glyph. This list's
+   substance is filenames, so it's the one global whose cost tracks how much text
+   is on screen. */
+:root[data-perf] body {
+  text-rendering: auto;
+}
+
+/* ---- Stacking and clipping per row ----
+   `isolation: isolate` exists only to contain the cursor glow ring's stacking
+   context; with the ring gone every card and row was creating one for nothing.
+   Rounded corners plus `overflow: hidden` mean a rounded clip per row — the clip
+   still has to be there (the expanding detail relies on it), but a rectangular
+   one is far cheaper than a masked one, and square rows suit the denser look. */
+:root[data-perf] .card:not(.card-flat),
+:root[data-perf] .card-flat.card-glow,
+:root[data-perf] .dl-card,
+:root[data-perf] .cat-card {
+  isolation: auto !important;
+}
+:root[data-perf] .dl-card {
+  border-radius: 0 !important;
+}
+/* The pinned header squares off with the rows, and drops its accent gradient for
+   a single flat tint. The scroll viewport's own rounding existed only so rows
+   couldn't poke out behind the header's rounded corners — with both square it has
+   nothing left to do. */
+:root[data-perf] .dl-head {
+  border-radius: 0;
+  background:
+    linear-gradient(
+      color-mix(in oklab, var(--accent) 10%, transparent),
+      color-mix(in oklab, var(--accent) 10%, transparent)
+    ),
+    var(--glass-bg);
+}
+:root[data-perf] .dl-scroll .ss-view {
+  border-radius: 0;
+}
+
+/* ---- Category tint ----
+   The tint was a full-bleed pseudo-element painting a gradient over every row,
+   with its fade range driven by two registered custom properties that hover
+   animated. Folding a flat tint into the row's own background drops a paint pass
+   per row and leaves those properties with no consumer, so hover stops mattering
+   to them. The category's colour still reads. */
+:root[data-perf] .dl-card::before {
+  display: none !important;
+}
+:root[data-perf] .dl-card {
+  background:
+    linear-gradient(
+      color-mix(in oklab, var(--cat, transparent) 13%, transparent),
+      color-mix(in oklab, var(--cat, transparent) 13%, transparent)
+    ),
+    var(--glass-bg);
+}
+/* Selection's accent wash sits above that tint — restated because the rule above
+   would otherwise beat `.dl-card.selected` on source order. */
+:root[data-perf] .dl-card.selected {
+  background:
+    linear-gradient(
+      color-mix(in oklab, var(--cat-glow, var(--accent)) 11%, transparent),
+      color-mix(in oklab, var(--cat-glow, var(--accent)) 11%, transparent)
+    ),
+    linear-gradient(
+      color-mix(in oklab, var(--cat, transparent) 13%, transparent),
+      color-mix(in oklab, var(--cat, transparent) 13%, transparent)
+    ),
+    var(--glass-bg);
+}
+
+/* ---- Page background ----
+   With the ambient blobs gone there's nothing for the gradient to sit behind. */
+:root[data-perf] body {
+  background: var(--bg);
+}
+
+/* ---- Hover text shine ----
+   The sweep works by clipping a gradient to the glyphs and making the text fill
+   transparent while it animates. With the animation gone that leaves a frozen
+   gradient across the label, so put the normal fill back. */
+:root[data-perf] .nav-item:hover .grow,
+:root[data-perf] .card:not(.card-flat):hover .card-title,
+:root[data-perf] .live-card:hover .card-title {
+  -webkit-text-fill-color: currentColor;
+}

@@ -6,6 +6,7 @@ import { Select } from "../components/Select";
 import { Switch } from "../components/Switch";
 import { api } from "../lib/api";
 import { subscribeToolProgress } from "../lib/events";
+import { setPerfMode, usePerfMode } from "../lib/perfMode";
 import { formatBytes } from "../lib/format";
 import type { BackendInfo, Settings, ToolStatus, UpdateInfo } from "../lib/types";
 
@@ -45,6 +46,19 @@ const SCRAPE_INTERVAL_OPTIONS = [30, 60, 90, 120, 300, 600];
 const PEER_CONNECT_OPTIONS = [3, 5, 10, 15, 30];
 // How many ports past the listen port to try if it's busy.
 const PORT_SPAN_OPTIONS = [0, 5, 10, 20, 50, 100];
+
+// How often batched progress reaches the UI, in ms. Every active transfer's
+// readings collapse into one event per flush, so this is a direct multiplier on
+// how much work the app does per second — the labels name the trade rather than
+// the number, since the number means nothing without it. Independent of
+// performance mode: a slower cadence is just as useful with the full look on.
+// Must stay inside the backend's clamp (100–5000 ms).
+const FLUSH_OPTIONS: { ms: number; label: string }[] = [
+  { ms: 250, label: "Smooth — 4× a second" },
+  { ms: 500, label: "Balanced — 2× a second" },
+  { ms: 1000, label: "Light — once a second" },
+  { ms: 2000, label: "Minimal — every 2 seconds" },
+];
 
 // The tabs of the combined settings card: General (behavior + advanced), HTTP
 // (direct-download tuning), Torrent (torrent tuning).
@@ -93,6 +107,9 @@ export function SettingsView() {
   const [tokenCopied, setTokenCopied] = useState(false);
   // Which tab of the combined General/HTTP/Torrent settings card is showing.
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  // A display preference, kept locally rather than in the settings file — so it's
+  // available before the backend answers and never flashes the full look.
+  const perf = usePerfMode();
 
   useEffect(() => {
     api.getSettings().then(setSettings).catch(() => {});
@@ -249,9 +266,7 @@ export function SettingsView() {
               <div>
                 <div className="setting-label">Concurrent downloads</div>
                 <div className="dim">
-                  How many downloads run at once, across HTTP and torrents. The
-                  rest wait in the queue. Set to Unlimited to run every download
-                  immediately.
+                  How many downloads run at once; the rest wait in the queue.
                 </div>
               </div>
               <Select
@@ -271,10 +286,8 @@ export function SettingsView() {
               <div>
                 <div className="setting-label">Changing a download's category</div>
                 <div className="dim">
-                  What happens when you move a download to another category. Move
-                  the file and moin relocates it into that category's folder,
-                  showing a Moving status until it lands, then resumes or marks it
-                  done.
+                  What happens to the file when you move a download to another
+                  category.
                 </div>
               </div>
               <Select
@@ -296,9 +309,8 @@ export function SettingsView() {
               <div>
                 <div className="setting-label">Stall timeout</div>
                 <div className="dim">
-                  How long a download may go without receiving any data before
-                  it's marked Stalled. A stalled download keeps its progress —
-                  retry it from the right-click menu. Set to Never to keep waiting.
+                  How long a download may receive no data before it's marked
+                  Stalled.
                 </div>
               </div>
               <Select
@@ -316,11 +328,29 @@ export function SettingsView() {
 
             <div className="setting-row">
               <div>
+                <div className="setting-label">Progress update rate</div>
+                <div className="dim">
+                  How often the list refreshes its speeds, percentages and totals.
+                </div>
+              </div>
+              <Select
+                value={String(settings?.progress_flush_ms ?? 250)}
+                ariaLabel="Progress update rate"
+                caret
+                disabled={!settings}
+                onChange={(v) => patch({ progress_flush_ms: Number(v) })}
+                options={FLUSH_OPTIONS.map(({ ms, label }) => ({
+                  value: String(ms),
+                  label,
+                }))}
+              />
+            </div>
+
+            <div className="setting-row">
+              <div>
                 <div className="setting-label">Close button minimizes to tray</div>
                 <div className="dim">
-                  Closing the window hides moin to the system tray and keeps
-                  downloads and seeding running in the background — reopen it from
-                  the tray icon. Turn off to quit moin when you close the window.
+                  Closing the window hides moin to the tray instead of quitting.
                 </div>
               </div>
               <Switch
@@ -350,8 +380,7 @@ export function SettingsView() {
               <div>
                 <div className="setting-label">Add downloads paused</div>
                 <div className="dim">
-                  New downloads wait paused instead of starting right away — resume
-                  them from the row when you're ready.
+                  New downloads wait paused instead of starting right away.
                 </div>
               </div>
               <Switch
@@ -361,6 +390,22 @@ export function SettingsView() {
                 onChange={(v) => patch({ add_paused: v })}
               />
             </div>
+
+            <div className="setting-row">
+              <div>
+                <div className="setting-label">Performance mode</div>
+                <div className="dim">
+                  Strip the interface back to flat colour — no animations, blur or
+                  effects — for very large lists.
+                </div>
+              </div>
+              <Switch
+                checked={perf}
+                ariaLabel="Performance mode"
+                onChange={setPerfMode}
+              />
+            </div>
+
           </>
         )}
 
@@ -369,10 +414,7 @@ export function SettingsView() {
         <div className="setting-row">
           <div>
             <div className="setting-label">Download engine</div>
-            <div className="dim">
-              The built-in engine needs no setup. aria2c is an external
-              downloader you can switch to once it's installed below.
-            </div>
+            <div className="dim">Which engine handles direct downloads.</div>
           </div>
           <Select
             value={httpEngine}
@@ -392,8 +434,7 @@ export function SettingsView() {
           <div>
             <div className="setting-label">Connection timeout</div>
             <div className="dim">
-              How long to wait to reach a server before giving up on the
-              connection. Applies to HTTP downloads on the built-in engine.
+              How long to wait to reach a server before giving up.
             </div>
           </div>
           <Select
@@ -414,8 +455,6 @@ export function SettingsView() {
             <div className="setting-label">Connections per download</div>
             <div className="dim">
               Split each file into parallel streams for faster downloads.
-              Sources that don't support it fall back to a single stream
-              automatically. Set to 1 to always use one.
             </div>
           </div>
           <Select
@@ -435,9 +474,7 @@ export function SettingsView() {
           <div>
             <div className="setting-label">Minimum split size</div>
             <div className="dim">
-              A file smaller than this downloads in a single stream; larger ones
-              split into parallel pieces no smaller than this. Lower it to split
-              more eagerly.
+              Files smaller than this download in a single stream.
             </div>
           </div>
           <Select
@@ -457,9 +494,8 @@ export function SettingsView() {
           <div>
             <div className="setting-label">Hide partial downloads</div>
             <div className="dim">
-              Keep the in-progress <code>.part</code> file hidden while it
-              downloads; the finished file appears when it's done. Works where the
-              OS supports it (Windows).
+              Keep the in-progress <code>.part</code> file hidden until it
+              finishes.
             </div>
           </div>
           <Switch
@@ -477,10 +513,7 @@ export function SettingsView() {
         <div className="setting-row">
           <div>
             <div className="setting-label">Torrent engine</div>
-            <div className="dim">
-              The built-in engine needs no setup. aria2c is an external downloader
-              you can switch to once it's installed below.
-            </div>
+            <div className="dim">Which engine handles torrents.</div>
           </div>
           <Select
             value={torrentEngine}
@@ -500,8 +533,7 @@ export function SettingsView() {
           <div>
             <div className="setting-label">Download limit</div>
             <div className="dim">
-              Cap how fast torrents download, across all of them. Set to Unlimited
-              for no cap. Takes effect right away.
+              Cap how fast torrents download, across all of them.
             </div>
           </div>
           <Select
@@ -520,10 +552,7 @@ export function SettingsView() {
         <div className="setting-row">
           <div>
             <div className="setting-label">Upload limit</div>
-            <div className="dim">
-              Cap how fast torrents upload to peers. A limit here also slows how
-              quickly you reach a seed ratio. Takes effect right away.
-            </div>
+            <div className="dim">Cap how fast torrents upload to peers.</div>
           </div>
           <Select
             value={String(settings?.torrent_upload_limit ?? 0)}
@@ -542,9 +571,8 @@ export function SettingsView() {
           <div>
             <div className="setting-label">Listen port</div>
             <div className="dim">
-              The port moin accepts incoming peer connections on. Forwarding it on
-              your router (or leaving UPnP on below) helps peers reach you. Applies
-              after a restart.
+              The port moin accepts incoming peer connections on. Applies after a
+              restart.
             </div>
           </div>
           <input
@@ -567,8 +595,7 @@ export function SettingsView() {
           <div>
             <div className="setting-label">Peer discovery (DHT)</div>
             <div className="dim">
-              Find peers without a tracker using the distributed hash table. Leave
-              it on unless you only use private trackers. Applies after a restart.
+              Find peers without a tracker. Applies after a restart.
             </div>
           </div>
           <Switch
@@ -583,8 +610,7 @@ export function SettingsView() {
           <div>
             <div className="setting-label">Forward my port (UPnP)</div>
             <div className="dim">
-              Ask your router to open the listen port automatically (UPnP /
-              NAT-PMP), so more peers can connect. Applies after a restart.
+              Ask your router to open the listen port. Applies after a restart.
             </div>
           </div>
           <Switch
@@ -599,10 +625,8 @@ export function SettingsView() {
           <div>
             <div className="setting-label">Seed ratio limit</div>
             <div className="dim">
-              Stop seeding a torrent once it has uploaded this much relative to
-              what it downloaded. Set to Unlimited to keep seeding until you stop
-              it by hand. You can always resume seeding a finished torrent from
-              the right-click menu.
+              Stop seeding once a torrent has uploaded this much of what it
+              downloaded.
             </div>
           </div>
           <Select
@@ -623,7 +647,6 @@ export function SettingsView() {
             <div className="setting-label">Seed time limit</div>
             <div className="dim">
               Stop seeding this long after a torrent finishes downloading.
-              Whichever of the ratio or time limit is reached first stops it.
             </div>
           </div>
           <Select
@@ -643,8 +666,7 @@ export function SettingsView() {
           <div>
             <div className="setting-label">Magnet timeout</div>
             <div className="dim">
-              How long to wait for a magnet's metadata from the swarm before giving
-              up. Raise it for rare torrents with few peers.
+              How long to wait for a magnet's metadata before giving up.
             </div>
           </div>
           <Select
@@ -664,8 +686,7 @@ export function SettingsView() {
           <div>
             <div className="setting-label">Tracker scrape interval</div>
             <div className="dim">
-              How often moin re-checks the trackers for the seeder and leecher
-              counts shown on a torrent.
+              How often to re-check trackers for seeder and leecher counts.
             </div>
           </div>
           <Select
@@ -685,8 +706,7 @@ export function SettingsView() {
           <div>
             <div className="setting-label">Peer connection timeout</div>
             <div className="dim">
-              How long to wait on a peer's handshake before dropping it. Applies
-              after a restart.
+              How long to wait on a peer's handshake before dropping it.
             </div>
           </div>
           <Select
@@ -706,8 +726,7 @@ export function SettingsView() {
           <div>
             <div className="setting-label">Listen port fallback range</div>
             <div className="dim">
-              If the listen port is busy, how many ports past it to try before
-              giving up. Applies after a restart.
+              How many ports past the listen port to try if it's busy.
             </div>
           </div>
           <Select
@@ -729,10 +748,8 @@ export function SettingsView() {
       <div className="card">
         <div className="card-title">Browser integration</div>
         <p className="dim">
-          Send downloads straight from your browser to moin with the companion
-          extension. It talks to moin over a local endpoint bound to{" "}
-          <code>127.0.0.1</code> — this machine only, never the network. The
-          toggle and port take effect after you restart moin.
+          Send downloads straight from your browser with the companion extension,
+          over a local endpoint bound to <code>127.0.0.1</code>.
         </p>
 
         <div className="setting-row">
@@ -754,8 +771,7 @@ export function SettingsView() {
           <div>
             <div className="setting-label">Port</div>
             <div className="dim">
-              The port the extension connects to. Change it only if another app
-              already uses it. Applies after a restart.
+              The port the extension connects to. Applies after a restart.
             </div>
           </div>
           <input
@@ -778,8 +794,7 @@ export function SettingsView() {
           <div>
             <div className="setting-label">Access token</div>
             <div className="dim">
-              Paste this into the extension to pair it with moin. Regenerate it to
-              cut off a paired browser — you'll need to pair again afterwards.
+              Paste this into the extension to pair it with moin.
             </div>
           </div>
           <div className="token-actions">
@@ -808,8 +823,7 @@ export function SettingsView() {
       <div className="card">
         <div className="card-title">External tools</div>
         <p className="dim">
-          Optional binaries moin can use in place of its built-in engines. Set one
-          up here, then pick it as an engine where it applies.
+          Optional binaries moin can use in place of its built-in engines.
         </p>
 
         <div className="tool-row">

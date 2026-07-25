@@ -42,6 +42,17 @@ const DEFAULT_SCRAPE_INTERVAL: u64 = 90;
 const DEFAULT_PEER_CONNECT_TIMEOUT: u64 = 10;
 /// How many ports past the listen port to try if it's busy.
 const DEFAULT_TORRENT_PORT_SPAN: u16 = 20;
+/// How often the coalesced progress buffer is flushed to the UI, in milliseconds.
+/// Every active transfer's readings collapse into one event per flush, so this is
+/// the knob that trades UI freshness against per-tick cost: at several thousand
+/// tasks, halving the rate roughly halves the IPC volume, the reducer work and the
+/// allocation churn behind it. Clamped to [`MIN_PROGRESS_FLUSH_MS`]..=[`MAX_PROGRESS_FLUSH_MS`]
+/// when read, so a hand-edited settings file can't stall or hammer the UI.
+const DEFAULT_PROGRESS_FLUSH_MS: u64 = 250;
+/// Fastest the progress flusher may run, however it's configured.
+pub const MIN_PROGRESS_FLUSH_MS: u64 = 100;
+/// Slowest the progress flusher may run — past this the UI looks frozen.
+pub const MAX_PROGRESS_FLUSH_MS: u64 = 5_000;
 
 /// What happens to a download's file when it's moved to a different category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -167,6 +178,25 @@ pub struct Settings {
     /// session binds its port (next start).
     #[serde(default = "default_torrent_port_span")]
     pub torrent_port_span: u16,
+    /// How often the batched progress event is emitted to the UI, in milliseconds.
+    /// Read live before every flush, so a change applies from the next tick. Trades
+    /// how current the numbers look against how much work the app does per second;
+    /// independent of the frontend's performance mode, since a slower cadence is
+    /// just as useful with the full look on.
+    #[serde(default = "default_progress_flush_ms")]
+    pub progress_flush_ms: u64,
+}
+
+impl Settings {
+    /// The flush cadence as a duration, clamped to a sane range. Always go through
+    /// this rather than reading the field directly — the value can come from a
+    /// hand-edited settings file.
+    pub fn progress_flush_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(
+            self.progress_flush_ms
+                .clamp(MIN_PROGRESS_FLUSH_MS, MAX_PROGRESS_FLUSH_MS),
+        )
+    }
 }
 
 fn default_connections() -> usize {
@@ -233,6 +263,10 @@ fn default_torrent_port_span() -> u16 {
     DEFAULT_TORRENT_PORT_SPAN
 }
 
+fn default_progress_flush_ms() -> u64 {
+    DEFAULT_PROGRESS_FLUSH_MS
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -265,6 +299,7 @@ impl Default for Settings {
             scrape_interval_secs: DEFAULT_SCRAPE_INTERVAL,
             peer_connect_timeout_secs: DEFAULT_PEER_CONNECT_TIMEOUT,
             torrent_port_span: DEFAULT_TORRENT_PORT_SPAN,
+            progress_flush_ms: DEFAULT_PROGRESS_FLUSH_MS,
         }
     }
 }
