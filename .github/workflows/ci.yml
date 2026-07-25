@@ -36,6 +36,13 @@ jobs:
       # time, so produce it before touching Cargo. App icons are committed.
       - run: npm run build
 
+      # tauri-build validates bundle.externalBin while compiling the app crate, so
+      # the engine sidecar has to be staged before any cargo step that builds it.
+      # (Building the daemon itself doesn't touch the app crate, so this is safe
+      # to run first.)
+      - name: Build and stage the engine daemon
+        run: node scripts/build-engine.mjs --debug
+
       - name: Typecheck web
         run: npx tsc --noEmit
 
@@ -48,12 +55,14 @@ jobs:
 
       - name: clippy
         working-directory: src-tauri
-        run: cargo clippy --all-targets
+        run: cargo clippy --workspace --all-targets
         continue-on-error: true
 
+      # --workspace, or this only tests the shell crate — the engine and daemon
+      # tests live in the workspace members.
       - name: Test the engine
         working-directory: src-tauri
-        run: cargo test
+        run: cargo test --workspace
 
       - name: Check the browser extension
         run: |
