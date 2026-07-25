@@ -1,6 +1,6 @@
 [package]
 name = "moin"
-version = "0.2.1"
+version = "0.2.2"
 description = "A general downloader with a built-in BitTorrent client."
 authors = ["moin contributors"]
 license = "MIT"

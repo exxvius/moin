@@ -29,6 +29,13 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// reachable peers would otherwise hang forever.
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Safety valve for a torrent that has peers connected but is delivering no data.
+/// It keeps its slot for this many stall windows before we still mark it Stalled,
+/// so the queue keeps moving instead of a choked/idle-but-connected torrent
+/// holding a slot forever. Much longer than the sourceless (no-peers) window,
+/// since a connected torrent often recovers.
+const SLOW_PEERED_STALL_MULT: u32 = 5;
+
 /// Wait until the control asks us to stop (Pause/Cancel), polling the shared
 /// atomic. Used to race a possibly-slow `add_torrent` so a stuck add stays
 /// cancellable — otherwise pause/cancel/remove do nothing until the add returns.
@@ -449,25 +456,34 @@ impl TorrentEngine {
         // When this seeding session began — set the first time we observe finished,
         // so the seed-time limit counts from completion, not from add.
         let mut seed_start: Option<Instant> = None;
-        // The bytes we resumed with. librqbit reports progress_bytes = 0 for the brief
-        // Initializing window before it's live with the trusted have-set, so we floor
-        // the reported progress at this to stop the bar dipping to 0 and crawling back
-        // up on launch. Real progress only ever grows past it.
+        // The bytes we resumed with. librqbit reports progress_bytes = 0 during the
+        // brief Initializing window before it's live with the trusted have-set, so we
+        // hold the displayed bar at this value for that window only (see `received`
+        // below) — once live we trust librqbit's real figure instead.
         let resumed_received = task.received;
-        // Stall tracking: the last received total we saw grow, and when. If it
-        // doesn't grow for `stall_timeout` while downloading, the torrent is stalled
-        // (no data flowing) — unless the user force-started it. It flips back to
-        // Downloading on its own the moment bytes arrive again.
-        let mut last_progress = resumed_received;
+        // Stall tracking runs off librqbit's *real* downloaded total (progress_bytes),
+        // not the displayed `received`: the display can be floored during Initializing,
+        // and stall detection must follow genuine data movement, not that floor. If the
+        // real total doesn't grow (and no bytes are flowing) for `stall_timeout` the
+        // torrent is stalled; any real byte or a positive speed resets it.
+        let mut last_progress = 0u64;
         let mut last_progress_at = Instant::now();
         let info_hash = handle.info_hash();
         loop {
             let stats = handle.stats();
             let finished = stats.finished && stats.total_bytes > 0;
-            // The received total, floored at what we resumed with (progress_bytes is
-            // 0 during the brief Initializing window).
+            // Live once librqbit is past the Initializing window (have-set trusted).
+            let live = !matches!(stats.state, librqbit::TorrentStatsState::Initializing);
+            // Displayed progress. Finished → the full size. During Initializing
+            // librqbit reports 0, so hold the resumed value to stop the bar dipping to
+            // 0 and crawling back on launch. Once live, trust the real figure even if
+            // it's below what we resumed with (stale fastresume, data removed off disk,
+            // or a re-verify that failed pieces) — an honest sub-100% that keeps
+            // fetching the missing pieces beats a fake 100% that can never seed.
             let received = if finished {
                 stats.total_bytes
+            } else if live {
+                stats.progress_bytes
             } else {
                 stats.progress_bytes.max(resumed_received)
             };
@@ -477,14 +493,15 @@ impl TorrentEngine {
                 .as_ref()
                 .map(|l| (l.download_speed.mbps * 1024.0 * 1024.0) as u64)
                 .unwrap_or(0);
-            // Data is flowing if bytes are being fetched (per-byte) or a piece just
-            // finished (per-piece). Either resets the stall timer, so the torrent
-            // leaves Stalled the moment anything arrives — not only when a whole
-            // piece verifies.
-            if down_bps > 0 || received > last_progress {
+            // Data is flowing if real bytes are being fetched (per-byte) or a piece
+            // just finished (per-piece). Either resets the stall timer, so the torrent
+            // leaves Stalled the moment anything genuinely arrives — not only when a
+            // whole piece verifies.
+            let real_progress = stats.progress_bytes;
+            if down_bps > 0 || real_progress > last_progress {
                 last_progress_at = Instant::now();
             }
-            last_progress = last_progress.max(received);
+            last_progress = last_progress.max(real_progress);
 
             // Once finished, stop seeding when the ratio or time limit is hit (0 /
             // zero means unlimited; a force-seed run passes both as unlimited). We
@@ -533,28 +550,44 @@ impl TorrentEngine {
                 return Outcome::Failed(msg);
             }
 
-            // Map librqbit's phase onto our status: verifying/resolving = Checking,
-            // Seeding once the selected files are done, Stalled when no data has
-            // flowed for the stall window (not force-started), otherwise Downloading.
-            let stalled = !control.force()
-                && !opts.stall_timeout.is_zero()
-                && last_progress_at.elapsed() >= opts.stall_timeout;
-            let status = if finished {
-                TaskStatus::Seeding
-            } else if matches!(stats.state, librqbit::TorrentStatsState::Initializing) {
-                TaskStatus::Checking
-            } else if stalled {
-                TaskStatus::Stalled
-            } else {
-                TaskStatus::Downloading
-            };
-
             // Connected peers, from the live snapshot's aggregate.
             let peers = stats
                 .live
                 .as_ref()
                 .map(|l| l.snapshot.peer_stats.live as u32)
                 .unwrap_or(0);
+
+            // Map librqbit's phase onto our status: verifying/resolving = Checking,
+            // Seeding once the selected files are done, Downloading otherwise.
+            //
+            // Stalled means genuinely stuck — no data has flowed for a while. Two
+            // windows so a connected torrent isn't churned off its slot the moment it
+            // goes quiet, while a dead slot still frees up:
+            //   • no peers at all → stalled after the normal stall window (there's
+            //     nowhere to get data from).
+            //   • peers connected but delivering nothing → a much longer leash
+            //     (SLOW_PEERED_STALL_MULT × the window) before we give up the slot,
+            //     since a connected-but-idle torrent often recovers.
+            // Any byte or finished piece resets the timer (above), so a slow-but-
+            // trickling torrent never trips this — only a truly idle one does.
+            // Force-started torrents, and a zeroed timeout, never stall.
+            let idle = last_progress_at.elapsed();
+            let stall_window = if peers == 0 {
+                opts.stall_timeout
+            } else {
+                opts.stall_timeout * SLOW_PEERED_STALL_MULT
+            };
+            let stalled =
+                !control.force() && !opts.stall_timeout.is_zero() && idle >= stall_window;
+            let status = if finished {
+                TaskStatus::Seeding
+            } else if !live {
+                TaskStatus::Checking
+            } else if stalled {
+                TaskStatus::Stalled
+            } else {
+                TaskStatus::Downloading
+            };
             // uploaded is monotonic; the delta over one poll gives up-speed.
             let up_speed = stats
                 .uploaded_bytes

@@ -43,6 +43,15 @@ export function percent(received: number, total: number | null): number | null {
   return Math.min(100, (received / total) * 100);
 }
 
+/** A percentage for display: one decimal place, but whole numbers stay clean
+ *  ("100%", not "100.0%"). The value is floored to that decimal so it never rounds
+ *  *up* to a misleading "100%" before the download is actually complete — a torrent
+ *  at 99.98% reads "99.9%", not "100%". */
+export function formatPercent(pct: number): string {
+  const floored = Math.floor(pct * 10) / 10;
+  return Number.isInteger(floored) ? `${floored}%` : `${floored.toFixed(1)}%`;
+}
+
 /** Compact duration from milliseconds, e.g. "2h 15m", "3m 5s", "12s". */
 export function formatDuration(ms: number): string {
   if (!ms || ms <= 0) return "—";

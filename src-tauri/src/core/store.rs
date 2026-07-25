@@ -42,7 +42,8 @@ impl Store {
                  torrent_files  TEXT,
                  own_dir        INTEGER NOT NULL DEFAULT 0,
                  final_dir      TEXT,
-                 skip_torrent_export INTEGER NOT NULL DEFAULT 0
+                 skip_torrent_export INTEGER NOT NULL DEFAULT 0,
+                 force_start    INTEGER NOT NULL DEFAULT 0
              );",
         )
         .map_err(err)?;
@@ -75,6 +76,13 @@ impl Store {
             "ALTER TABLE tasks ADD COLUMN skip_torrent_export INTEGER NOT NULL DEFAULT 0",
             [],
         );
+        // force_start persists so a force-started torrent stays forced (and never
+        // stalls) across a restart, instead of quietly reverting to a normal queued
+        // torrent that can stall again.
+        let _ = conn.execute(
+            "ALTER TABLE tasks ADD COLUMN force_start INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
         // Backfill a completion time for rows finished before this column existed.
         let _ = conn.execute(
             "UPDATE tasks SET completed_at = updated_at
@@ -92,7 +100,7 @@ impl Store {
                 "SELECT id, kind, url, filename, dest, status, total, received, error,
                         created_at, updated_at, archived, active_ms, completed_at, backend,
                         category, headers, info_hash, torrent_source, uploaded, torrent_files,
-                        own_dir, final_dir, skip_torrent_export
+                        own_dir, final_dir, skip_torrent_export, force_start
                  FROM tasks ORDER BY created_at DESC",
             )
             .map_err(err)?;
@@ -138,7 +146,7 @@ impl Store {
                     own_dir: r.get::<_, i64>(21)? != 0,
                     skip_torrent_export: r.get::<_, i64>(23)? != 0,
                     force_seed: false,
-                    force_start: false,
+                    force_start: r.get::<_, i64>(24)? != 0,
                 })
             })
             .map_err(err)?;
@@ -153,15 +161,15 @@ impl Store {
                    (id, kind, url, filename, dest, status, total, received, error,
                     created_at, updated_at, archived, active_ms, completed_at, backend,
                     category, headers, info_hash, torrent_source, uploaded, torrent_files,
-                    own_dir, final_dir, skip_torrent_export)
+                    own_dir, final_dir, skip_torrent_export, force_start)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,
-                         ?18,?19,?20,?21,?22,?23,?24)
+                         ?18,?19,?20,?21,?22,?23,?24,?25)
                  ON CONFLICT(id) DO UPDATE SET
                    status=?6, total=?7, received=?8, error=?9, updated_at=?11,
                    archived=?12, active_ms=?13, completed_at=?14, backend=?15,
                    category=?16, headers=?17, info_hash=?18, torrent_source=?19,
                    uploaded=?20, torrent_files=?21, own_dir=?22, final_dir=?23,
-                   skip_torrent_export=?24",
+                   skip_torrent_export=?24, force_start=?25",
                 params![
                     t.id,
                     kind_str(t.kind),
@@ -187,6 +195,7 @@ impl Store {
                     t.own_dir as i64,
                     t.final_dir,
                     t.skip_torrent_export as i64,
+                    t.force_start as i64,
                 ],
             )
             .map_err(err)?;
@@ -369,6 +378,7 @@ mod tests {
         task.info_hash = Some("deadbeef".into());
         task.torrent_source = Some(TorrentSource::Magnet);
         task.uploaded = 2048;
+        task.force_start = true; // must survive the round-trip (never-stall-again)
         task.files = vec![
             TorrentFile {
                 path: "ubuntu.iso".into(),
@@ -400,6 +410,7 @@ mod tests {
         assert_eq!(got.torrent_source, Some(TorrentSource::Magnet));
         assert_eq!(got.uploaded, 2048);
         assert_eq!(got.files, task.files);
+        assert!(got.force_start);
         // Transient fields reset to 0 on load.
         assert_eq!(
             (got.seeders, got.leechers, got.peers, got.up_speed),

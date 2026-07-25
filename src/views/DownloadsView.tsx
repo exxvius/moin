@@ -34,6 +34,7 @@ import {
   formatDate,
   formatDuration,
   formatEta,
+  formatPercent,
   formatSpeed,
   percent,
 } from "../lib/format";
@@ -279,20 +280,27 @@ interface Stats {
   timeMs: number;
 }
 
-/** All-time stats across every download (including archived). */
+/** Stats over the tasks passed in — the caller hands us the currently-shown rows
+ *  (after status/category/search filters), so the footer reflects the view. */
 function computeStats(tasks: Task[]): Stats {
   let totalDownloaded = 0;
   let totalUploaded = 0;
+  // Ratio is a torrent concept — it divides upload by download. Only torrents
+  // upload, so the denominator must be torrent bytes only; folding HTTP downloads
+  // into it would understate the ratio (all that download, no matching upload).
+  let torrentDownloaded = 0;
   let speedBytes = 0;
   let speedMs = 0;
   let filesDone = 0;
   let timeMs = 0;
   for (const t of tasks) {
     // A checking torrent's `received` is pieces being verified on disk, not data
-    // downloaded this run — counting it would inflate the all-time total, then snap
-    // back when checking ends. Only count real downloaded bytes.
-    if (t.status !== "checking") totalDownloaded += t.received;
+    // downloaded this run — counting it would inflate the total, then snap back
+    // when checking ends. Only count real downloaded bytes.
+    const downloaded = t.status === "checking" ? 0 : t.received;
+    totalDownloaded += downloaded;
     totalUploaded += t.uploaded ?? 0;
+    if (t.kind === "torrent") torrentDownloaded += downloaded;
     timeMs += t.active_ms;
     if (t.active_ms > 0) {
       speedBytes += t.received;
@@ -303,7 +311,7 @@ function computeStats(tasks: Task[]): Stats {
   return {
     totalDownloaded,
     totalUploaded,
-    ratio: totalDownloaded > 0 ? totalUploaded / totalDownloaded : null,
+    ratio: torrentDownloaded > 0 ? totalUploaded / torrentDownloaded : null,
     avgSpeed: speedMs > 0 ? speedBytes / (speedMs / 1000) : 0,
     filesDone,
     timeMs,
@@ -612,7 +620,8 @@ export function DownloadsView() {
     return c;
   }, [store.all]);
 
-  const stats = useMemo(() => computeStats(store.all), [store.all]);
+  // Stats follow the filtered/searched view, not the whole list.
+  const stats = useMemo(() => computeStats(rows), [rows]);
   const totalSpeed = useMemo(
     () =>
       store.all.reduce(
@@ -1746,7 +1755,7 @@ function Card({
               <i />
             </span>
             <span className="mini-pct">
-              {pct != null ? `${Math.round(pct)}%` : ""}
+              {pct != null ? formatPercent(pct) : ""}
             </span>
           </span>
         );

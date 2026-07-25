@@ -29,6 +29,7 @@ import {
   formatDate,
   formatDuration,
   formatEta,
+  formatPercent,
   percent,
 } from "../lib/format";
 import type { Task, TorrentDetails, TorrentFile } from "../lib/types";
@@ -274,7 +275,7 @@ function GeneralTab({
             </span>
           </span>
           <span className="tg-progress-pct">
-            {pct != null ? `${Math.round(pct)}%` : ""}
+            {pct != null ? formatPercent(pct) : ""}
           </span>
         </div>
         <span className={`td-bar big${done ? " done" : ""}`} style={{ ["--p" as string]: (pct ?? 0) / 100 }}>
@@ -361,7 +362,7 @@ function fileBar(received: number, size: number, selected: boolean) {
       >
         <i />
       </span>
-      <span className="td-tpct num dim">{Math.round(pct)}%</span>
+      <span className="td-tpct num dim">{formatPercent(pct)}</span>
     </span>
   );
 }

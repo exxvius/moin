@@ -149,14 +149,19 @@ impl Engine {
                     TaskStatus::Connecting
                         | TaskStatus::Checking
                         | TaskStatus::Downloading
+                        | TaskStatus::Stalled
                         | TaskStatus::Seeding
                 )
             {
-                // A torrent that was downloading or seeding at last exit resumes on
-                // its own: re-queued so the run loop re-adds it to the session, where
-                // librqbit fastresume (or aria2's saved control file) carries it on
-                // from the pieces already on disk. A torrent the user had paused
-                // stays paused. (The store already zeroes swarm readings on load.)
+                // A torrent that was downloading, stalled, or seeding at last exit
+                // resumes on its own: re-queued so the run loop re-adds it to the
+                // session, where librqbit fastresume (or aria2's saved control file)
+                // carries it on from the pieces already on disk. Stalled is included
+                // so a torrent that had merely gone quiet doesn't stay frozen as
+                // Stalled forever — on resume it re-evaluates (→ Seeding if it's
+                // actually complete, Downloading if it finds peers, Stalled again only
+                // if still truly stuck). A torrent the user had paused stays paused.
+                // (The store already zeroes swarm readings on load.)
                 task.status = TaskStatus::Queued;
             } else if matches!(
                 task.status,

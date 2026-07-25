@@ -47,6 +47,19 @@ const initial: State = { tasks: {}, speeds: {}, moves: {}, version: 0 };
 
 /** Fold one progress reading into the task/speed/move maps, cloning each map at
  *  most once per batch (the maps passed in are the working copies). */
+// Statuses a task can't come back from with a live tick — its final state arrived
+// on the `updated` channel, which isn't ordered against the buffered `progress`
+// channel. A progress reading captured just before the task settled can still
+// flush just after; dropping it here stops a stale "downloading" + speed reading
+// from resurrecting a finished/paused task that then never gets another tick to
+// correct it (the frozen-speed, stuck-"Downloading" bug).
+const SETTLED = new Set<Task["status"]>([
+  "completed",
+  "failed",
+  "canceled",
+  "paused",
+]);
+
 function applyProgress(
   p: TaskProgress,
   tasks: Record<string, Task>,
@@ -55,6 +68,7 @@ function applyProgress(
 ): void {
   const prev = tasks[p.id];
   if (!prev) return;
+  if (SETTLED.has(prev.status)) return;
   // A Moving tick reports relocation bytes, not download bytes — keep it out of
   // the task's own received/total so the download progress is preserved.
   if (p.status === "moving") {
