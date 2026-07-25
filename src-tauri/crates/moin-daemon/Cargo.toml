@@ -1,0 +1,40 @@
+[package]
+name = "moin-daemon"
+version.workspace = true
+description = "moin's engine daemon: hosts the download engine and serves it over loopback."
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# The binary every UI talks to. Named `moin-engine` because that's what it is to
+# anyone looking at a process list.
+[lib]
+name = "moin_daemon"
+path = "src/lib.rs"
+
+[[bin]]
+name = "moin-engine"
+path = "src/main.rs"
+
+[dependencies]
+moin-core = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+uuid = { workspace = true }
+futures-util = { workspace = true }
+# Resolves the same per-user data and Downloads folders Tauri used to hand the
+# engine. See src/paths.rs.
+dirs = "5"
+
+[dev-dependencies]
+# The end-to-end test drives the extension listener like the extension will.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+tiny_http = "0.12"
+serde_json = { workspace = true }

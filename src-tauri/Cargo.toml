@@ -1,11 +1,48 @@
-[package]
-name = "moin"
-version = "0.3.0"
-description = "A general downloader with a built-in BitTorrent client."
+# The app crate is also the workspace root. `moin-core` is the shell-free engine;
+# `moin-daemon` is the process that actually hosts it. This crate is now just the
+# Tauri UI, and talks to the daemon over loopback like any other client.
+[workspace]
+members = [".", "crates/moin-core", "crates/moin-daemon"]
+resolver = "2"
+
+# Shared across every crate so a version can never drift between them.
+[workspace.package]
+version = "0.4.0"
 authors = ["moin contributors"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.77"
+
+[workspace.dependencies]
+moin-core = { path = "crates/moin-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "io-util", "time", "process", "net", "signal"] }
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "http2", "charset", "json"] }
+futures-util = "0.3"
+async-trait = "0.1"
+librqbit = { git = "https://github.com/exxvius/rqbit", rev = "b8f0c52642a3dd8f1956683491276b5a4620feea", default-features = false, features = ["default-tls"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
+regex = "1"
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors"] }
+
+[package]
+name = "moin"
+version.workspace = true
+description = "A general downloader with a built-in BitTorrent client."
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 
 # The library holds the whole app so the engine can be unit-tested without the
 # Tauri shell. `main.rs` is a thin binary that calls into it.
@@ -16,12 +53,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
-[dev-dependencies]
-# The end-to-end RPC test drives the loopback server like the extension will.
-# Blocking reqwest keeps the test synchronous (no runtime to stand up itself).
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
-
 [dependencies]
+# The engine itself lives in the daemon process; the app only needs its types to
+# talk about tasks and settings over the wire.
+moin-core = { workspace = true }
+
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
@@ -33,53 +69,18 @@ tauri-plugin-opener = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-# aria2's JSON-RPC `addTorrent` takes the .torrent as base64, so the aria2 torrent
-# backend encodes the cached file with this.
-base64 = "0.22"
-thiserror = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tracing-appender = "0.2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 
-# Async runtime for the download engines (librqbit + media land in later phases;
-# Tauri already hosts a tokio runtime we build on). `process` drives the managed
-# aria2c daemon and its `--version` probe.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "io-util", "time", "process", "net"] }
+# Tauri hosts a tokio runtime the app uses for its own async work (spawning and
+# health-checking the daemon).
+tokio = { workspace = true }
 
-# Direct HTTP downloads: streaming bodies + Range-based resume. rustls keeps the
-# TLS stack self-contained (no system OpenSSL).
-reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "http2", "charset", "json"] }
-futures-util = "0.3"
-# Async methods on the pluggable DownloadBackend trait (dyn-dispatched).
-async-trait = "0.1"
-
-# Embedded BitTorrent engine: an in-process librqbit Session drives magnets and
-# .torrent files with no external tools. We pin a small moin fork of rqbit
-# (branch `moin`) that exposes the have-bitfield + per-peer piece availability
-# upstream keeps internal, so we can draw a piece bar + availability figure.
-# default-features off drops the bundled http-api/webui/axum surface we don't use;
-# default-tls keeps the TLS stack on native TLS (no NASM/aws-lc).
-librqbit = { git = "https://github.com/exxvius/rqbit", rev = "b8f0c52642a3dd8f1956683491276b5a4620feea", default-features = false, features = ["default-tls"] }
-
-# Download registry + resume state.
-rusqlite = { version = "0.31", features = ["bundled"] }
-uuid = { version = "1", features = ["v4"] }
-
-# Managed-tool fetch: unzip the aria2c release archive and checksum it before we
-# trust the binary.
-zip = { version = "2", default-features = false, features = ["deflate"] }
-sha2 = "0.10"
-
-# Category auto-rename rules: optional user-supplied regex find/replace over
-# torrent file names (literal + preset transforms need no crate; regex does).
-regex = "1"
-
-# Loopback RPC server the browser extension posts captured downloads to. Small,
-# pure-Rust, blocking HTTP/1.1 — it runs on its own thread and calls into the
-# (thread-safe) engine, so it stays off Tauri's async runtime.
-tiny_http = "0.12"
+# Talking to the daemon over loopback.
+reqwest = { workspace = true }
 
 [features]
 # Enable custom protocol in production; keep default off for dev.

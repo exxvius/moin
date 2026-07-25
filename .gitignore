@@ -31,3 +31,6 @@ moin.lock
 .idea/
 .DS_Store
 Thumbs.db
+
+# Staged engine sidecar (built by scripts/build-engine.mjs)
+/src-tauri/binaries/

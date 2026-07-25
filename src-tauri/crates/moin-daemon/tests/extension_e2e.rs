@@ -1,5 +1,5 @@
-//! End-to-end test for browser-capture: a cookie-gated origin server + moin's
-//! loopback RPC + the engine + the embedded backend, all offline.
+//! End-to-end test for browser-capture: a cookie-gated origin server + the
+//! daemon's extension listener + the engine + the embedded backend, all offline.
 //!
 //! It proves the whole chain a browser extension will drive: POST a URL with
 //! captured headers to `/add`, and moin downloads it the way the browser would —
@@ -12,9 +12,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use moin_lib::core::engine::{Emitter, Engine};
-use moin_lib::core::task::{Task, TaskProgress, TaskStatus};
-use moin_lib::rpc;
+use moin_core::engine::{Emitter, Engine};
+use moin_core::task::{Task, TaskProgress, TaskStatus};
+use moin_daemon::extension;
 use serde_json::json;
 use std::sync::OnceLock;
 use tiny_http::{Response, Server};
@@ -72,9 +72,9 @@ fn start_origin() -> String {
     format!("http://127.0.0.1:{port}/file.bin")
 }
 
-/// Build an engine in a fresh temp data dir with the RPC server bound to a known
-/// free port, and start it. Returns the engine, its base URL, its token, and the
-/// download directory the RPC server writes into.
+/// Build an engine in a fresh temp data dir with the extension listener bound to a
+/// known free port, and start it. Returns the engine, its base URL, its token, and
+/// the download directory the listener writes into.
 fn start_moin() -> (Engine, String, String, PathBuf) {
     let base = std::env::temp_dir().join(format!("moin-e2e-{}", uuid_like()));
     let data_dir = base.join("data");
@@ -94,7 +94,15 @@ fn start_moin() -> (Engine, String, String, PathBuf) {
     let token = settings.rpc_token.clone();
     engine.set_settings(settings);
 
-    rpc::spawn(engine.clone(), download_dir.clone(), test_runtime());
+    // The listener is async and lives for the whole test binary; the shutdown
+    // sender is leaked so the channel never closes under it.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    Box::leak(Box::new(shutdown_tx));
+    test_runtime().spawn(extension::serve(
+        engine.clone(),
+        download_dir.clone(),
+        shutdown_rx,
+    ));
     wait_for_ping(port);
 
     (
@@ -114,7 +122,7 @@ fn uuid_like() -> u128 {
         .as_nanos()
 }
 
-/// Block until the RPC server answers `/ping`, so requests don't race the bind.
+/// Block until the listener answers `/ping`, so requests don't race the bind.
 fn wait_for_ping(port: u16) {
     let url = format!("http://127.0.0.1:{port}/ping");
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -124,7 +132,7 @@ fn wait_for_ping(port: u16) {
         }
         thread::sleep(Duration::from_millis(50));
     }
-    panic!("RPC server never came up on port {port}");
+    panic!("the extension listener never came up on port {port}");
 }
 
 /// Poll the engine until `id` reaches a terminal-ish state, returning the task.

@@ -391,7 +391,7 @@ pub fn layout_folder(cat: &Category, torrent_name: &str, file_count: usize) -> O
 
 /// The renamed relative path for each of `files` after applying `cat`'s rename
 /// rules (index-aligned). A blank entry means "keep the original", which is what
-/// [`crate::core::engine`]'s add path expects. Only the file name is rewritten;
+/// [`crate::engine`]'s add path expects. Only the file name is rewritten;
 /// its folder path is preserved.
 pub fn plan_renames(cat: &Category, files: &[TorrentFile]) -> Vec<String> {
     let rules = &cat.automation.renames;

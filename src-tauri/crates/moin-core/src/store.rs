@@ -300,7 +300,7 @@ fn parse_status(s: &str) -> TaskStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::task::{TorrentFile, TorrentSource};
+    use crate::task::{TorrentFile, TorrentSource};
     use std::collections::BTreeMap;
 
     /// A throwaway data dir under the system temp dir, cleaned on drop.

@@ -1,0 +1,51 @@
+[package]
+name = "moin-core"
+version.workspace = true
+description = "moin's headless download engine: HTTP, BitTorrent, queue, categories, store."
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# Nothing here may depend on a shell or a transport — no tauri, no http server.
+# See the crate docs in src/lib.rs.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+# aria2's JSON-RPC `addTorrent` takes the .torrent as base64, so the aria2 torrent
+# backend encodes the cached file with this.
+base64 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# Async runtime for the download engines. `process` drives the managed aria2c
+# daemon and its `--version` probe.
+tokio = { workspace = true }
+
+# Direct HTTP downloads: streaming bodies + Range-based resume. rustls keeps the
+# TLS stack self-contained (no system OpenSSL).
+reqwest = { workspace = true }
+futures-util = { workspace = true }
+# Async methods on the pluggable DownloadBackend trait (dyn-dispatched).
+async-trait = { workspace = true }
+
+# Embedded BitTorrent engine: an in-process librqbit Session drives magnets and
+# .torrent files with no external tools. We pin a small moin fork of rqbit
+# (branch `moin`) that exposes the have-bitfield + per-peer piece availability
+# upstream keeps internal, so we can draw a piece bar + availability figure.
+# default-features off drops the bundled http-api/webui/axum surface we don't use;
+# default-tls keeps the TLS stack on native TLS (no NASM/aws-lc).
+librqbit = { workspace = true }
+
+# Download registry + resume state.
+rusqlite = { workspace = true }
+uuid = { workspace = true }
+
+# Managed-tool fetch: unzip the aria2c release archive and checksum it before we
+# trust the binary.
+zip = { workspace = true }
+sha2 = { workspace = true }
+
+# Category auto-rename rules: optional user-supplied regex find/replace over
+# torrent file names (literal + preset transforms need no crate; regex does).
+regex = { workspace = true }

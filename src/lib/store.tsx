@@ -13,7 +13,8 @@ import {
   type SetStateAction,
 } from "react";
 import { api } from "./api";
-import { subscribeTasks } from "./events";
+import { subscribeCategories, subscribeTasks } from "./events";
+import { notifyComplete } from "./notify";
 import type { Category, Task, TaskProgress } from "./types";
 
 /** How far along a file relocation is, while a task is in the Moving state. */
@@ -197,6 +198,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     api.listCategories().then(setCategories).catch(() => {});
+    // Another window may have edited them; keep in step rather than going stale.
+    return subscribeCategories(setCategories);
   }, []);
 
   useEffect(() => {
@@ -204,18 +207,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let unlisten: (() => void) | undefined;
 
     subscribeTasks({
+      // The engine opens every subscription with the full list, so there's no
+      // separate fetch to race against the stream — and if the connection ever
+      // has to resynchronise, this arrives again and replaces the set.
+      onSnapshot: (tasks) => dispatch({ type: "LOAD", tasks }),
       onAdded: (task) => dispatch({ type: "ADDED", task }),
-      // The backend already coalesces ticks and flushes on a timer, so a batch
+      // The engine already coalesces ticks and flushes on a timer, so a batch
       // arrives ready to apply in one dispatch.
       onProgress: (batch) => dispatch({ type: "PROGRESS_BATCH", updates: batch }),
       onUpdated: (task) => dispatch({ type: "UPDATED", task }),
       onRemoved: (id) => dispatch({ type: "REMOVED", id }),
+      // The engine has no desktop session of its own, so the notification is ours
+      // to show. It only fires this when the user has notifications switched on.
+      onCompleted: (task) => void notifyComplete(task.filename),
     }).then((u) => {
       if (disposed) u();
       else unlisten = u;
     });
-
-    api.listDownloads().then((tasks) => dispatch({ type: "LOAD", tasks }));
 
     return () => {
       disposed = true;

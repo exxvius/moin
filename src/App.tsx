@@ -12,11 +12,16 @@ import {
 } from "./components/icons";
 import { QuitConfirmModal } from "./components/QuitConfirmModal";
 import { RailAccentPicker } from "./components/RailAccentPicker";
-import { StoreProvider } from "./lib/store";
+import { StoreProvider, useStore } from "./lib/store";
 import { initCursorFx } from "./lib/cursor";
 import { usePerfMode } from "./lib/perfMode";
-import { subscribeConfirmQuit, subscribeTaskAdded } from "./lib/events";
+import {
+  subscribeConfirmQuit,
+  subscribeSettings,
+  subscribeTaskAdded,
+} from "./lib/events";
 import { api } from "./lib/api";
+import type { Task } from "./lib/types";
 import { useTheme } from "./lib/theme";
 import { useAccent } from "./lib/accent";
 
@@ -31,10 +36,22 @@ const NAV: {
   { id: "categories", label: "Categories", icon: CategoriesIcon },
 ];
 
+// What "quitting would interrupt something" means: a transfer the engine is
+// actively running. Mirrors the engine's own has_active_transfers() — paused and
+// queued items survive a restart untouched, so they don't warrant a prompt.
+const RUNNING: ReadonlySet<Task["status"]> = new Set<Task["status"]>([
+  "connecting",
+  "downloading",
+  "checking",
+  "seeding",
+  "moving",
+]);
+
 function Shell() {
   const [theme, toggleTheme] = useTheme();
   const [accent, setAccent] = useAccent();
   const perf = usePerfMode();
+  const store = useStore();
   const [view, setView] = useState<View>("downloads");
   const [quitPrompt, setQuitPrompt] = useState(false);
   // Which rail icon last got clicked + a bump counter, so re-clicking replays its
@@ -60,7 +77,7 @@ function Shell() {
     return initCursorFx();
   }, [perf]);
 
-  // The backend asks for confirmation when the window is closed with transfers
+  // The shell asks for confirmation when the window is closed with transfers
   // running and "minimize to tray" off — show the quit prompt.
   useEffect(() => {
     const un = subscribeConfirmQuit(() => setQuitPrompt(true));
@@ -68,6 +85,24 @@ function Shell() {
       un.then((u) => u());
     };
   }, []);
+
+  // The close button is handled natively and can't wait on the engine, so it
+  // reads a cached copy of the only two things it needs. We own keeping that
+  // current: we already hold the task list, and we follow the setting (which
+  // another window may have changed).
+  const [closeToTray, setCloseToTray] = useState(true);
+  useEffect(() => {
+    api
+      .getSettings()
+      .then((s) => setCloseToTray(s.close_to_tray))
+      .catch(() => {});
+    return subscribeSettings((s) => setCloseToTray(s.close_to_tray));
+  }, []);
+
+  const anyRunning = store.all.some((t) => RUNNING.has(t.status));
+  useEffect(() => {
+    api.setQuitPolicy(closeToTray, anyRunning).catch(() => {});
+  }, [closeToTray, anyRunning]);
 
   // Easter egg: whenever a download is added, drop the arrow into the tray on the
   // Downloads rail icon — even when you're on another page.

@@ -5,7 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Select } from "../components/Select";
 import { Switch } from "../components/Switch";
 import { api } from "../lib/api";
-import { subscribeToolProgress } from "../lib/events";
+import { subscribeSettings, subscribeToolProgress } from "../lib/events";
 import { setPerfMode, usePerfMode } from "../lib/perfMode";
 import { formatBytes } from "../lib/format";
 import type { BackendInfo, Settings, ToolStatus, UpdateInfo } from "../lib/types";
@@ -115,6 +115,8 @@ export function SettingsView() {
     api.getSettings().then(setSettings).catch(() => {});
     api.listBackends().then(setBackends).catch(() => {});
     api.toolStatus().then(setTool).catch(() => {});
+    // Another window may be editing the same settings; follow along.
+    return subscribeSettings(setSettings);
   }, []);
 
   // Keep the port field in step with the loaded/committed value.
@@ -126,13 +128,11 @@ export function SettingsView() {
     if (settings) setTorrentPortDraft(String(settings.torrent_listen_port));
   }, [settings?.torrent_listen_port]);
 
+  // Send only what changed. Writing the whole object would mean whichever window
+  // saved last quietly reverted anything another one had changed since it loaded.
   const patch = (change: Partial<Settings>) => {
-    setSettings((prev) => {
-      if (!prev) return prev;
-      const next = { ...prev, ...change };
-      api.saveSettings(next).catch(() => {});
-      return next;
-    });
+    setSettings((prev) => (prev ? { ...prev, ...change } : prev));
+    api.saveSettings(change).catch(() => {});
   };
 
   const refreshTool = (next: ToolStatus) => {

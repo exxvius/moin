@@ -2681,7 +2681,7 @@ impl Inner {
                 info_hash: Option<String>,
                 old_dest: String,
                 new_dest: String,
-                files: Vec<crate::core::task::TorrentFile>,
+                files: Vec<crate::task::TorrentFile>,
                 own_dir: bool,
                 category: Option<String>,
                 task: Task,
@@ -3154,7 +3154,7 @@ fn cleanup_partial(task: &Task) {
 async fn move_torrent_files(
     old_dest: String,
     new_dest: String,
-    files: Vec<crate::core::task::TorrentFile>,
+    files: Vec<crate::task::TorrentFile>,
     own_dir: bool,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {

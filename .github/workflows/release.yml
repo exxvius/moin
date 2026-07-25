@@ -1,7 +1,7 @@
 name: release
 
 # Build self-contained moin packages for Windows, macOS, and Linux, and attach
-# them — plus the portable Windows binary and the browser-extension zips — to a
+# them — plus the portable Windows build and the browser-extension zips — to a
 # GitHub Release.
 on:
   push:
@@ -52,6 +52,11 @@ jobs:
       - name: Install web dependencies
         run: npm ci
 
+      # The engine ships as a sidecar beside the app executable, so it has to be
+      # built and staged before Tauri bundles anything.
+      - name: Build the engine daemon
+        run: node scripts/build-engine.mjs --target ${{ matrix.triple }}
+
       - name: Build and release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -65,17 +70,25 @@ jobs:
           prerelease: false
 
       # tauri-action attaches only the bundle installers (NSIS/MSI/…), not the raw
-      # binary. Attach the standalone portable .exe too — it's self-contained and
-      # runs without installation on Windows 10/11.
-      - name: Attach portable Windows binary
+      # binaries. Attach a portable build too — it runs without installation on
+      # Windows 10/11.
+      #
+      # A zip rather than a bare .exe: moin is two executables now (the app and the
+      # engine it talks to), and the app looks for the engine next to itself. A
+      # lone moin.exe would start and immediately report a missing engine.
+      - name: Attach the portable Windows build
         if: matrix.os == 'windows-latest'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ver="${GITHUB_REF_NAME#v}"
-          out="moin_${ver}_x64_portable.exe"
-          cp "src-tauri/target/${{ matrix.triple }}/release/moin.exe" "$out"
+          out="moin_${ver}_x64_portable.zip"
+          staging="portable"
+          mkdir -p "$staging"
+          cp "src-tauri/target/${{ matrix.triple }}/release/moin.exe" "$staging/"
+          cp "src-tauri/target/${{ matrix.triple }}/release/moin-engine.exe" "$staging/"
+          7z a -tzip "$out" "./$staging/*"
           gh release upload "$GITHUB_REF_NAME" "$out" --clobber
 
       # The browser extension lives in this repo, so ship it with the release:

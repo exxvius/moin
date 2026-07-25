@@ -1,6 +1,6 @@
 {
   "name": "moin",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A general downloader with a built-in BitTorrent client.",
   "type": "module",
   "license": "MIT",
@@ -8,7 +8,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "engine": "node scripts/build-engine.mjs",
+    "engine:debug": "node scripts/build-engine.mjs --debug"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
