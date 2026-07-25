@@ -24,7 +24,6 @@ import { Select } from "../components/Select";
 import { MultiSelect } from "../components/MultiSelect";
 import { SmoothScroll } from "../components/SmoothScroll";
 import { ContextMenu, type MenuEntry } from "../components/ContextMenu";
-import { GhostGlowLayer } from "../components/GhostGlowLayer";
 import { useListSelection } from "../lib/useListSelection";
 import { useStore, type MoveProgress } from "../lib/store";
 import { categorySwatch, findCategory } from "../lib/categories";
@@ -720,24 +719,6 @@ export function DownloadsView() {
     onActivate: toggle,
   });
 
-  // The ghost layer draws each highlighted row's glow outside the clipped list
-  // so it can spill past the sides. It tracks the rows on its own.
-  const taskById = useMemo(
-    () => new Map(store.all.map((t) => [t.id, t])),
-    [store.all],
-  );
-  const toneOf = (id: string): string | null => {
-    const t = taskById.get(id);
-    if (!t) return null;
-    // The escaping border glow follows the category's effects color (falling back
-    // to its main color); uncategorized rows glow in the theme accent. The
-    // background tint uses the main color separately (see the card style).
-    const cat = findCategory(store.categories, t.category);
-    const glow = cat?.effects_color || cat?.color;
-    if (glow) return categorySwatch(glow);
-    return "var(--accent)";
-  };
-
   // Ctrl/Cmd+A selects everything visible; Esc clears (unless a menu owns Esc).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1332,14 +1313,6 @@ export function DownloadsView() {
             ref={listRef}
             className="dl-scroll"
             onScroll={onListScroll}
-            behind={
-              <GhostGlowLayer
-                viewportRef={listRef}
-                selectedIds={sel.selected}
-                toneOf={toneOf}
-                frozen={sel.marquee != null}
-              />
-            }
             header={
               <div
                 className="dl-head dl-grid"

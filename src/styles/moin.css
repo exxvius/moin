@@ -2385,7 +2385,7 @@
   flex: 1;
   min-height: 0;
   position: relative;
-  /* Own stacking context so the ghost/view/bar/header z-order stays local. */
+  /* Own stacking context so the view/bar/header z-order stays local. */
   isolation: isolate;
   display: flex;
   gap: var(--space-2);
@@ -2399,8 +2399,9 @@
   flex: 1;
   min-width: 0; /* shrink to the container instead of the grid's min-content */
   min-height: 0;
-  /* Native vertical scroll; clip the sides so a row's glow escapes only through
-     the ghost layer behind, never past the viewport edge. */
+  /* Native vertical scroll; the sides are clipped too, but the list is inset by
+     --dl-edge (see .dl-scroll .ss-content) so a row's hover/select glow still has
+     room to spill left/right before the clip. */
   overflow-y: auto;
   overflow-x: clip;
   overscroll-behavior: contain;
@@ -2426,36 +2427,6 @@
   z-index: 2;
   width: var(--ss-bar-w);
 }
-/* Glow layer: covers the viewport but sits behind it, clipped tight top/bottom
-   (so glow can't bleed over the toolbar/statusbar) yet opened at the sides so a
-   row's glow escapes left/right. Rows paint on top and hide the inner glow. */
-.dl-ghost-layer {
-  position: absolute;
-  z-index: 0;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  right: calc(var(--ss-bar-w) + var(--space-2));
-  pointer-events: none;
-  clip-path: inset(0 -30px 0 -30px);
-}
-.dl-ghost {
-  position: absolute;
-  top: 0;
-  left: 0;
-  border-radius: var(--radius-sm);
-  box-shadow: 0 0 20px -14px
-    color-mix(in oklab, var(--tone, var(--accent)) 34%, transparent);
-  /* Fade in on appear, and out (opacity flipped by JS) when the row stops being
-     highlighted — matching the card's 240ms hover/select transitions. */
-  animation: ghost-in 240ms var(--ease);
-  transition: opacity 240ms var(--ease);
-}
-@keyframes ghost-in {
-  from {
-    opacity: 0;
-  }
-}
 .ss-thumb {
   position: absolute;
   left: 0;
@@ -2472,6 +2443,13 @@
 .ss-thumb:hover {
   background: var(--accent);
 }
+/* Side room for the rows' hover/select glow. The viewport clips horizontally, so
+   the list is inset by this much and the floated header is nudged in to match (see
+   .dl-scroll .ss-header) — that keeps the glow off the clip edge while the header
+   columns still line up with the rows. */
+.dl-scroll {
+  --dl-edge: 12px;
+}
 /* The downloads list stacks inside the scroller. */
 .dl-scroll .ss-content {
   display: flex;
@@ -2479,6 +2457,12 @@
   /* No flex gap: the list is windowed, so row spacing lives on each card as a
      bottom margin instead — that keeps the virtual spacers' heights exact. */
   gap: 0;
+  padding-inline: var(--dl-edge);
+}
+/* Line the floated header up with the inset rows. */
+.dl-scroll .ss-header {
+  left: var(--dl-edge);
+  right: calc(var(--ss-bar-w) + var(--space-2) + var(--dl-edge));
 }
 /* Row pitch for the windowed list (card height + this margin must equal the
    ROW_STRIDE constant in DownloadsView). */
@@ -2669,8 +2653,9 @@
   position: relative;
   z-index: 1;
 }
-/* Hover/selected only shift the border here — the glow itself is drawn by the
-   ghost layer behind the list, so it can spill past the clipped sides. */
+/* Hover brings in the tinted border plus a soft outer glow (selected overrides the
+   shadow below with a stronger ring). The viewport leaves --dl-edge of side room so
+   the glow spills left/right without being clipped. */
 .dl-card:hover,
 .dl-card.selected {
   --tint-start: 0%;
@@ -2681,6 +2666,8 @@
     var(--cat-glow, var(--accent)) 32%,
     var(--glass-border)
   );
+  box-shadow: 0 4px 20px -14px
+    color-mix(in oklab, var(--cat-glow, var(--accent)) 42%, transparent);
 }
 /* Selected rows stand out clearly from a merely-hovered one: a bright accent
    border with a matching outer ring, a faint accent wash over the surface, and a

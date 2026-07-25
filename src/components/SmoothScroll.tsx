@@ -11,8 +11,6 @@ interface Props {
   className?: string;
   /** Pinned, non-scrolling header floated over the top of the list. */
   header?: ReactNode;
-  /** Content rendered behind the viewport (e.g. an escaping-glow layer). */
-  behind?: ReactNode;
   /** Fires whenever the scroll offset or content size changes. */
   onScroll?: () => void;
 }
@@ -23,9 +21,9 @@ interface Props {
  *
  * The viewport scrolls natively — no momentum/eased transform, which felt laggy.
  * The native scrollbar is hidden; a custom thumb in `.ss-bar` mirrors the scroll
- * position and can be dragged. The viewport clips its rows on every side, so a
- * highlighted row's escaping glow is drawn by a separate layer passed as `behind`
- * (which sits outside the clip).
+ * position and can be dragged. The viewport clips top/bottom (so glow can't bleed
+ * over the header/statusbar) but leaves a little side room so a highlighted row's
+ * glow can spill left/right.
  *
  * Because the header is floated rather than `position: sticky`, the content is
  * padded down by the header's height so the first row rests just below it.
@@ -34,7 +32,7 @@ interface Props {
  * rows and reading its scroll offset).
  */
 export const SmoothScroll = forwardRef<HTMLDivElement, Props>(
-  function SmoothScroll({ children, className, header, behind, onScroll }, ref) {
+  function SmoothScroll({ children, className, header, onScroll }, ref) {
     const viewRef = useRef<HTMLDivElement>(null); // native scroll viewport
     const contentRef = useRef<HTMLDivElement>(null);
     const headerRef = useRef<HTMLDivElement>(null);
@@ -125,7 +123,6 @@ export const SmoothScroll = forwardRef<HTMLDivElement, Props>(
 
     return (
       <div className={`ss${className ? ` ${className}` : ""}`}>
-        {behind}
         <div className="ss-view" ref={viewRef}>
           <div className="ss-content" ref={contentRef}>
             {children}

@@ -1,6 +1,7 @@
-// Multi-select for the downloads list: plain/ctrl/shift clicks plus a drag
-// marquee. Click handling lives at the container level (a native mousedown
-// listener) so it can tell a click apart from a rubber-band drag by distance.
+// Multi-select for the downloads list: ctrl/shift clicks plus a drag marquee.
+// A plain click doesn't select — it only opens the row. Click handling lives at
+// the container level (a native mousedown listener) so it can tell a click apart
+// from a rubber-band drag by distance.
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
@@ -90,9 +91,11 @@ export function useListSelection({
         return;
       }
 
-      if (range && anchor.current) {
+      if (range) {
+        // Shift-click extends a range from the anchor and never expands the row.
+        // With no anchor yet, this row just becomes the anchor and the selection.
         const order = orderRef.current;
-        const a = order.indexOf(anchor.current);
+        const a = anchor.current ? order.indexOf(anchor.current) : -1;
         const b = order.indexOf(id);
         if (a !== -1 && b !== -1) {
           const [lo, hi] = a < b ? [a, b] : [b, a];
@@ -102,8 +105,11 @@ export function useListSelection({
             for (const r of span) next.add(r);
             return next;
           });
-          return;
+        } else {
+          setSelected(new Set([id]));
+          anchor.current = id;
         }
+        return;
       }
 
       if (additive) {
@@ -117,8 +123,11 @@ export function useListSelection({
         return;
       }
 
-      // Plain click: this row becomes the sole selection and toggles open.
-      setSelected(new Set([id]));
+      // Plain click isn't a selection gesture — only ctrl/shift or a drag marquee
+      // select. Clear any existing selection (so we never leave one row highlighted
+      // while a different one is open), keep this row as the range anchor for a
+      // later shift-click, and toggle it open.
+      setSelected((prev) => (prev.size ? new Set() : prev));
       anchor.current = id;
       onActivateRef.current?.(id);
     },
